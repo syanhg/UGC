@@ -1,0 +1,26 @@
+{
+  "name": "ugc",
+  "version": "0.1.0",
+  "description": "CLI for generating short, face-consistent UGC video clips",
+  "type": "module",
+  "bin": {
+    "ugc": "./src/cli.ts"
+  },
+  "scripts": {
+    "ugc": "node src/cli.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/syanhg/UGC.git"
+  },
+  "license": "ISC",
+  "dependencies": {
+    "@ai-sdk/gateway": "^4.0.28",
+    "ai": "^7.0.37"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "typescript": "^5.9.3"
+  }
+}

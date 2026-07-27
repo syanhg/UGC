@@ -1,0 +1,7 @@
+# One prompt per line. Blank lines and # comments are ignored.
+# Each line becomes one clip. Run: node src/cli.ts batch shots.example.txt
+
+holds the bottle up next to her face, raises an eyebrow, and says "okay I was NOT expecting this"
+sitting on the edge of her bed mid-sentence, gesturing with one hand, talking fast and excited
+leans into the camera and lowers her voice like she is telling a secret
+turns away laughing, then snaps back to the lens and points at the product

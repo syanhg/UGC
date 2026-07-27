@@ -1,0 +1,11 @@
+{
+  "model": "google/veo-3.1-generate-001",
+  "mode": "i2v",
+  "refs": ["refs/face.jpg"],
+  "duration": 8,
+  "aspectRatio": "9:16",
+  "resolution": "720x1280",
+  "generateAudio": true,
+  "outDir": "out",
+  "stylePrompt": "Selfie-style UGC video, handheld phone camera, natural indoor lighting, authentic and unpolished, subject looks directly into the lens and speaks to camera. Keep the subject's face, hair, and identity exactly consistent with the reference image."
+}
