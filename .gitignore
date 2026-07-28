@@ -5,3 +5,4 @@ refs/
 .env.local
 avatars.json
 !refs/.gitkeep
+.ugc-pulled.json

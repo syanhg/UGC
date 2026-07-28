@@ -91,6 +91,23 @@ export function buildPrompt(prompt: string, config: Config): string {
   return config.stylePrompt ? `${prompt}\n\n${config.stylePrompt}` : prompt;
 }
 
+/**
+ * Veo reports inputTokenLimit 480. Tokens are roughly four characters, so this
+ * is a deliberately loose ceiling — the point is to catch a runaway prompt
+ * locally rather than after a round trip, not to count exactly.
+ */
+const PROMPT_CHAR_LIMIT = 480 * 4;
+
+export function checkPromptLength(fullPrompt: string): string | undefined {
+  if (fullPrompt.length <= PROMPT_CHAR_LIMIT) return undefined;
+
+  return (
+    `Prompt is ${fullPrompt.length} characters, over Veo's ~${PROMPT_CHAR_LIMIT} limit. ` +
+    `Shorten the line, or trim "stylePrompt" in ugc.config.json` +
+    `${' — avatar notes are appended to it too'}.`
+  );
+}
+
 export async function generateClip({
   prompt,
   config,
@@ -98,6 +115,9 @@ export async function generateClip({
   label,
 }: GenerateOptions): Promise<GenerateResult> {
   const fullPrompt = buildPrompt(prompt, config);
+
+  const tooLong = checkPromptLength(fullPrompt);
+  if (tooLong) throw new Error(tooLong);
 
   // t2v ignores references entirely, so don't touch the filesystem for them —
   // a stale "refs" entry in the config shouldn't fail a text-only clip.

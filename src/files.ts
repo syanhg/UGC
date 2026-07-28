@@ -1,4 +1,4 @@
-import { writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { fromRoot } from './paths.ts';
 
@@ -20,13 +20,14 @@ export interface RemoteFile {
 }
 
 /**
- * Google's file download endpoint returns intermittent 503s. By the time it is
- * called the clip is already rendered and billed, so retrying is much cheaper
- * than regenerating. Backs off 2s, 4s, 8s, 16s.
+ * Google's file download endpoint returns intermittent 503s that have lasted
+ * minutes, not seconds. By the time this runs the clip is rendered and billed,
+ * so waiting is strictly cheaper than failing — hence a window measured in
+ * minutes. Backs off 2s, 4s, 8s, 16s, then 30s a try, ~2.5 minutes total.
  */
 export async function fetchWithRetry(
   url: string,
-  { attempts = 5, signal }: { attempts?: number; signal?: AbortSignal } = {},
+  { attempts = 8, signal }: { attempts?: number; signal?: AbortSignal } = {},
 ): Promise<Response> {
   let lastError: unknown;
 
@@ -39,7 +40,9 @@ export async function fetchWithRetry(
       lastError = err;
       if (signal?.aborted) throw err;
       if (attempt < attempts) {
-        await new Promise((r) => setTimeout(r, 2_000 * 2 ** (attempt - 1)));
+        await new Promise((r) =>
+          setTimeout(r, Math.min(2_000 * 2 ** (attempt - 1), 30_000)),
+        );
       }
     }
   }
@@ -71,21 +74,47 @@ export async function listGeneratedClips(): Promise<RemoteFile[]> {
     .sort((a, b) => a.createTime.localeCompare(b.createTime));
 }
 
-function slugify(text: string): string {
-  return (
-    text
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-|-$/g, '')
-      .slice(0, 48) || 'clip'
-  );
+export function fileId(file: RemoteFile): string {
+  return file.name.replace(/^files\//, '');
 }
 
-/** A stable local name, so pulling the same clip twice does not duplicate it. */
+/**
+ * Google's displayName is a sentence, not a filename — "Veo-3.1-fast-generate-
+ * preview generated clip, operation name: ...". Keep only the model.
+ */
 export function localNameFor(file: RemoteFile): string {
   const stamp = file.createTime.replace(/[:.]/g, '-').slice(0, 19);
-  const id = file.name.replace(/^files\//, '');
-  return `${stamp}_${slugify(file.displayName ?? id)}_${id}.mp4`;
+  const model = /^([\w.-]+?)\s+generated clip/i.exec(file.displayName ?? '')?.[1];
+  return `${stamp}_${(model ?? 'veo').toLowerCase()}_${fileId(file)}.mp4`;
+}
+
+/**
+ * Which clips have already been pulled, keyed by Google's file id. Tracked in a
+ * manifest rather than inferred from filenames, so renaming or moving a clip
+ * after pulling it does not cause the next pull to fetch it again.
+ */
+const MANIFEST = '.ugc-pulled.json';
+
+async function loadManifest(): Promise<Record<string, string>> {
+  const path = fromRoot(MANIFEST);
+  if (!existsSync(path)) return {};
+
+  try {
+    return JSON.parse(await readFile(path, 'utf8')) as Record<string, string>;
+  } catch {
+    // A corrupt manifest should cost a duplicate download, not a crash.
+    return {};
+  }
+}
+
+export async function markPulled(file: RemoteFile, path: string): Promise<void> {
+  const manifest = await loadManifest();
+  manifest[fileId(file)] = path;
+  await writeFile(fromRoot(MANIFEST), `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
+export async function alreadyPulled(file: RemoteFile): Promise<boolean> {
+  return fileId(file) in (await loadManifest());
 }
 
 export async function downloadClip(
@@ -95,11 +124,15 @@ export async function downloadClip(
   await mkdir(fromRoot(outDir), { recursive: true });
   const path = fromRoot(outDir, localNameFor(file));
 
-  if (existsSync(path)) return { path, skipped: true };
+  if (existsSync(path) || (await alreadyPulled(file))) {
+    return { path, skipped: true };
+  }
 
-  const id = file.name.replace(/^files\//, '');
-  const res = await fetchWithRetry(`${API}/${id}:download?alt=media&key=${apiKey()}`);
+  const res = await fetchWithRetry(
+    `${API}/${fileId(file)}:download?alt=media&key=${apiKey()}`,
+  );
 
   await writeFile(path, new Uint8Array(await res.arrayBuffer()));
+  await markPulled(file, path);
   return { path, skipped: false };
 }

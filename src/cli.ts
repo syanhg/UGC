@@ -25,7 +25,12 @@ import {
   select,
   askText,
 } from './ui.ts';
-import { generateClip, buildPrompt, explainError } from './generate.ts';
+import {
+  generateClip,
+  buildPrompt,
+  checkPromptLength,
+  explainError,
+} from './generate.ts';
 import {
   addAvatar,
   assertValidName,
@@ -305,7 +310,11 @@ async function runPrompts(prompts: string[], args: Args) {
           `${args.n > 1 ? ` · ${args.n} variations, seeds ${baseSeed ?? '?'}…` : ''} ` +
           '─'.repeat(30),
       );
-      console.log(`\nPROMPT SENT TO VEO:\n\n${buildPrompt(prompt, config)}\n`);
+      const full = buildPrompt(prompt, config);
+      console.log(`\nPROMPT SENT TO VEO:\n\n${full}\n`);
+      console.log(`LENGTH: ${full.length} chars`);
+      const tooLong = checkPromptLength(full);
+      if (tooLong) console.log(`  ⚠ ${tooLong}`);
       console.log(
         `FIRST FRAME: ${
           config.mode === 'i2v'
@@ -341,6 +350,7 @@ async function runPrompts(prompts: string[], args: Args) {
   );
 
   let failed = 0;
+  let stranded = 0;
 
   await pool(jobs, concurrency, async (job, index) => {
     const tag = `[${index + 1}/${total}]`;
@@ -363,11 +373,30 @@ async function runPrompts(prompts: string[], args: Args) {
       for (const warning of warnings) console.log(`${tag}   ⚠ ${warning}`);
     } catch (err) {
       failed++;
+      const message = err instanceof Error ? err.message : String(err);
+      if (/could not be downloaded/i.test(message)) stranded++;
+
       console.error(
         `${tag} FAILED\n      ${explainError(err).split('\n').join('\n      ')}\n`,
       );
     }
   });
+
+  // A clip that rendered but failed to download is finished work already paid
+  // for. Collecting it should not depend on the user knowing to run `pull`.
+  if (stranded) {
+    console.log(
+      `${stranded} clip${stranded === 1 ? '' : 's'} rendered but did not download — recovering...\n`,
+    );
+    try {
+      const recovered = await pullClips(config.outDir);
+      failed -= Math.min(recovered, stranded);
+    } catch (err) {
+      console.error(
+        `  recovery failed: ${explainError(err)}\n  Try again later with: ugc pull\n`,
+      );
+    }
+  }
 
   console.log(
     `\n${total - failed}/${total} succeeded${failed ? ` · ${failed} failed` : ''}` +
@@ -532,6 +561,31 @@ async function runInteractive() {
  * 48 hours, so a download that failed after billing is recoverable rather than
  * lost.
  */
+async function pullClips(outDir: string): Promise<number> {
+  const clips = await listGeneratedClips();
+  let pulled = 0;
+
+  for (const clip of clips) {
+    const expires = new Date(clip.expirationTime).toLocaleString();
+    try {
+      const { path, skipped } = await downloadClip(clip, outDir);
+      const label = relative(process.cwd(), path);
+      if (skipped) {
+        console.log(`  · ${label} (already local)`);
+      } else {
+        pulled++;
+        console.log(`  ✓ ${label}  · expires ${expires}`);
+      }
+    } catch (err) {
+      console.log(
+        `  ✗ ${clip.name} — ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  return pulled;
+}
+
 async function runPull(args: Args) {
   const config = applyOverrides(await loadConfig(), args);
   const clips = await listGeneratedClips();
@@ -541,25 +595,11 @@ async function runPull(args: Args) {
     return;
   }
 
-  console.log(`\n${clips.length} clip${clips.length === 1 ? '' : 's'} on the Files API:\n`);
+  console.log(
+    `\n${clips.length} clip${clips.length === 1 ? '' : 's'} on the Files API:\n`,
+  );
 
-  let pulled = 0;
-  for (const clip of clips) {
-    const expires = new Date(clip.expirationTime).toLocaleString();
-    try {
-      const { path, skipped } = await downloadClip(clip, config.outDir);
-      const label = relative(process.cwd(), path);
-      if (skipped) {
-        console.log(`  · ${label} (already local)`);
-      } else {
-        pulled++;
-        console.log(`  ✓ ${label}  · expires ${expires}`);
-      }
-    } catch (err) {
-      console.log(`  ✗ ${clip.name} — ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-
+  const pulled = await pullClips(config.outDir);
   console.log(`\n${pulled} new clip${pulled === 1 ? '' : 's'} → ${config.outDir}/\n`);
 }
 
