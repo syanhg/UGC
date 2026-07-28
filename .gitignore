@@ -3,4 +3,5 @@ out/
 refs/
 .env
 .env.local
+avatars.json
 !refs/.gitkeep

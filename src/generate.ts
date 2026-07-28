@@ -3,14 +3,7 @@ import { gateway } from '@ai-sdk/gateway';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { resolve, extname, basename } from 'node:path';
-import type { Config } from './config.ts';
-
-const MEDIA_TYPES: Record<string, string> = {
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.png': 'image/png',
-  '.webp': 'image/webp',
-};
+import { MEDIA_TYPES, type Config } from './config.ts';
 
 /**
  * Reference images become data URLs so the same local face file can be reused
@@ -23,7 +16,8 @@ async function loadRef(path: string): Promise<string> {
   if (!existsSync(abs)) {
     throw new Error(
       `Reference image not found: ${path}\n` +
-        `Drop a photo of your face at that path, or point "refs" in ugc.config.json somewhere else.`,
+        `Register an avatar instead:  ugc avatar add <name> <photo.jpg>\n` +
+        `Or point "refs" in ugc.config.json at a photo that exists.`,
     );
   }
 

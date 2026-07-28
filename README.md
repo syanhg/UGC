@@ -9,20 +9,56 @@ npm install
 export AI_GATEWAY_API_KEY="..."   # https://vercel.com/dashboard → AI Gateway → API Keys
 ```
 
-Drop a reference photo of your subject at `refs/face.jpg` (or point `refs` in `ugc.config.json` elsewhere).
-
 No build step — Node 25 runs the TypeScript directly.
 
 ## Use
 
+Register your subject once, then generate against that name forever:
+
 ```bash
-node src/cli.ts gen "holds up the bottle and grins: 'three days. three.'"
-node src/cli.ts gen "unboxes the package on her bed" --seed 42 --n 3
-node src/cli.ts batch shots.example.txt
+node src/cli.ts avatar add sofia ~/photos/sofia-1.jpg ~/photos/sofia-2.jpg \
+    --notes "woman in her mid-20s, shoulder-length dark hair, freckles"
+
+node src/cli.ts gen "holds up the bottle and grins: 'three days. three.'" --avatar sofia
+node src/cli.ts gen "unboxes the package on her bed" --avatar sofia --n 3
+node src/cli.ts batch shots.example.txt --avatar sofia
 node src/cli.ts models
 ```
 
-Clips land in `out/` as timestamped `.mp4` files.
+Clips land in `out/` as timestamped `.mp4` files, prefixed with the avatar name.
+
+## Avatars
+
+An avatar is a subject you register once. Everything that affects likeness gets
+captured at `add` time and replayed on every clip after it.
+
+```bash
+ugc avatar add <name> <photo...>   # register; photos are copied into refs/<name>/
+ugc avatar list                    # what's registered
+ugc avatar rm <name>               # drop the avatar and its copies
+```
+
+What an avatar stores:
+
+| Field | Set with | Why it matters |
+|---|---|---|
+| refs | positional photos | The reference images. This does most of the consistency work. |
+| seed | `--seed`, else random | Locked at registration, so the same prompt reproduces the same clip. |
+| notes | `--notes` | An identity description appended to the style prompt — it reinforces likeness in words, which helps most in `r2v`. |
+| mode / model | `--mode`, `--model` | Pin a per-avatar mode or model when one suits that subject better. |
+
+Photos are **copied** into `refs/<name>/`, not referenced in place — moving or
+deleting the original later can't silently change your avatar. The registry
+itself lives in `avatars.json` (gitignored, like `refs/`).
+
+Settings resolve in this order, each overriding the last:
+
+```
+built-in defaults → ugc.config.json → avatar → CLI flags
+```
+
+So `--seed 99` still wins over the avatar's locked seed for a one-off
+experiment, and `--mode r2v` overrides an avatar pinned to `i2v`.
 
 ## Keeping the face consistent
 
@@ -36,8 +72,8 @@ Three modes, set via `mode` in the config or `--mode`:
 
 Practical tips:
 
-- **Reuse one reference photo across every clip.** This matters more than any other setting.
-- **A fixed `--seed` makes runs reproducible** — same seed plus same prompt returns the same video, so you can change one word and see just that change.
+- **Reuse the same reference photos across every clip.** This matters more than any other setting — which is exactly what registering an avatar enforces.
+- **A fixed seed makes runs reproducible** — same seed plus same prompt returns the same video, so you can change one word and see just that change. An avatar carries a locked seed for this reason. Note that a seed reproduces a *run*; it does not by itself hold a face steady across different prompts. The reference photos do that.
 - **`i2v` locks hardest.** If clips drift in `r2v`, switch to `i2v`.
 - **The `stylePrompt` in the config is appended to every prompt.** It carries the "selfie-style, handheld, looks into lens" framing plus an explicit instruction to match the reference face — edit it once and it applies everywhere.
 
@@ -60,7 +96,7 @@ Every model runs through the Vercel AI Gateway, so switching is a string change,
 
 ## Config
 
-`ugc.config.json` holds the defaults; every field has a matching CLI flag that overrides it per-run.
+`ugc.config.json` holds the defaults shared by every avatar — the model, the framing, the output shape. Anything an avatar or a CLI flag sets overrides it.
 
 ```json
 {
@@ -80,5 +116,5 @@ Every model runs through the Vercel AI Gateway, so switching is a string change,
 
 - Generation takes minutes, not seconds. The timeout is 10 minutes per clip.
 - Batch runs keep going if one clip fails; failures are reported at the end and the process exits non-zero.
-- `refs/` and `out/` are gitignored — your source photos and renders stay local.
+- `refs/`, `out/`, and `avatars.json` are gitignored — your avatars, source photos, and renders stay local.
 - Video models run safety filters. A refusal surfaces as `NoVideoGeneratedError`; usually a softer prompt or a different reference photo clears it.

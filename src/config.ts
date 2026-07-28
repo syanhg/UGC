@@ -6,6 +6,14 @@ export type Mode = 'i2v' | 'r2v' | 't2v';
 export type AspectRatio = `${number}:${number}`;
 export type Resolution = `${number}x${number}`;
 
+/** The image formats a reference photo may use, shared by the registry and the generator. */
+export const MEDIA_TYPES: Record<string, string> = {
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.webp': 'image/webp',
+};
+
 export interface Config {
   model: string;
   mode: Mode;
