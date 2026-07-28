@@ -27,19 +27,85 @@ No build step — Node 25 runs the TypeScript directly.
 
 ## Use
 
+Run `ugc` with no arguments for a guided session — it walks through avatar,
+prompt, model, aspect ratio, duration, resolution, and how many clips to run at
+once, then shows a cost estimate before anything is sent:
+
+```
+$ ugc
+
+Avatar
+  · 1) model1   1 ref · seed 386405
+    2) model2   1 ref · seed 139822
+    3) none     text-only, no face reference
+  > [1]
+
+What happens in the clip?
+  > holds up the serum bottle and grins: "three days. three."
+
+Model
+  · 1) veo-3.1-fast-generate-preview   ~$0.10/s
+    2) veo-3.1-generate-preview        ~$0.40/s
+  > [1]
+
+…
+
+Ready
+  4 clips · veo-3.1-fast-generate-preview · 8s · 9:16 · 720p · avatar model1
+  Estimated cost: ~$3.20
+Generate? [y/N]
+```
+
+Every answer maps to a flag, so anything you do interactively can be scripted
+later. To install `ugc` as a global command:
+
+```bash
+npm link      # from the project directory
+```
+
+It stays pointed at this directory, so your avatars, config, and key are found
+no matter where you run it from.
+
+## Scripted use
+
 Register your subject once, then generate against that name forever:
 
 ```bash
-node src/cli.ts avatar add sofia ~/photos/sofia-1.jpg ~/photos/sofia-2.jpg \
-    --notes "woman in her mid-20s, shoulder-length dark hair, freckles"
+ugc avatar add sofia ~/photos/sofia-1.jpg ~/photos/sofia-2.jpg
 
-node src/cli.ts gen "holds up the bottle and grins: 'three days. three.'" --avatar sofia
-node src/cli.ts gen "unboxes the package on her bed" --avatar sofia --n 3
-node src/cli.ts batch shots.example.txt --avatar sofia
-node src/cli.ts models
+ugc gen "holds up the bottle and grins: 'three days. three.'" --avatar sofia
+ugc gen "unboxes the package on her bed" --avatar sofia --n 4 -j 4
+ugc batch shots.example.txt --avatar sofia --resolution 1080p -j 3
+ugc models
 ```
 
 Clips land in `out/` as timestamped `.mp4` files, prefixed with the avatar name.
+
+### Settings
+
+| Flag | Values | Notes |
+|---|---|---|
+| `--duration` | 4, 6, 8 | Veo accepts nothing else |
+| `--aspect` | `9:16`, `16:9` | vertical or landscape |
+| `--resolution` | `720p`, `1080p` | `1280x720` style also accepted |
+| `--n` | any | variations of the same prompt, at consecutive seeds |
+| `--concurrency` / `-j` | 1–5 | how many render at once |
+| `--dry-run` | — | print the assembled prompt, send nothing |
+
+Invalid combinations fail locally rather than after a round trip.
+
+### Concurrency
+
+A clip takes minutes, almost all of it waiting on Google's queue, so running
+them one at a time wastes nearly all the wall clock:
+
+```bash
+ugc batch shots.txt --avatar sofia -j 4     # ~4x faster than the default
+```
+
+Jobs finish out of order, so each line is tagged with its own job number. Keep
+`-j` at 5 or below; past that you trade waiting for rate-limit errors. A failure
+in one job doesn't stop the others, and the exit code is non-zero if any failed.
 
 ## Avatars
 

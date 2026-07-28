@@ -5,10 +5,26 @@ import { relative } from 'node:path';
 import {
   loadConfig,
   parseAspectRatio,
+  parseDuration,
+  parseResolution,
+  resolutionTier,
+  DURATIONS,
+  RESOLUTION_TIERS,
   type AspectRatio,
   type Config,
   type Mode,
+  type Resolution,
+  type ResolutionTier,
 } from './config.ts';
+import {
+  closeUi,
+  confirm,
+  heading,
+  note,
+  askNumber,
+  select,
+  askText,
+} from './ui.ts';
 import { generateClip, buildPrompt, explainError } from './generate.ts';
 import {
   addAvatar,
@@ -29,6 +45,7 @@ const HELP = `
 ugc — generate short, face-consistent UGC clips
 
 USAGE
+  ugc                             Interactive: pick avatar, prompt, and settings
   ugc gen "<prompt>" [flags]      Generate one clip
   ugc batch <file> [flags]        Generate one clip per non-empty line of <file>
   ugc avatar add <name> <photo...> [flags]   Register a fixed avatar
@@ -43,20 +60,22 @@ FLAGS
   --ref <path>       Reference face image (repeatable). Overrides config "refs"
   --mode <m>         i2v | r2v | t2v          (default: config, "i2v")
   --model <id>       Veo model id              (default: config)
-  --duration <n>     Clip length in seconds    (default: config, 8)
-  --aspect <w:h>     Aspect ratio              (default: config, "9:16")
+  --duration <n>     Clip length: 4, 6, or 8   (default: config, 8)
+  --aspect <w:h>     9:16 or 16:9              (default: config, "9:16")
+  --resolution <r>   720p or 1080p             (default: config)
   --seed <n>         Fixed seed for reproducible output
   --notes <text>     Identity description, stored on the avatar (avatar add)
   --n <n>            Variations per prompt     (default: 1)
+  --concurrency <n>  Clips to generate at once, alias -j  (default: 1)
   --no-audio         Disable generated audio
   --dry-run          Show the assembled prompt and settings; generate nothing
 
 EXAMPLES
-  ugc avatar add sofia ~/photos/sofia-1.jpg ~/photos/sofia-2.jpg \\
-      --notes "woman in her mid-20s, shoulder-length dark hair, freckles"
+  ugc                                     # guided, with a cost estimate
+  ugc avatar add sofia ~/photos/sofia-1.jpg --notes "mid-20s, dark hair"
   ugc gen "holds up the serum bottle: 'three days. three.'" --avatar sofia
-  ugc gen "unboxes the package on her bed" --avatar sofia --n 3
-  ugc batch shots.txt --avatar sofia
+  ugc gen "unboxes the package on her bed" --avatar sofia --n 4 -j 4
+  ugc batch shots.txt --avatar sofia --resolution 1080p -j 3
 `.trim();
 
 interface Args {
@@ -68,19 +87,23 @@ interface Args {
   model?: string;
   duration?: number;
   aspect?: AspectRatio;
+  resolution?: Resolution;
   seed?: number;
   notes?: string;
   n: number;
+  concurrency: number;
   noAudio: boolean;
   dryRun: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
   const args: Args = {
-    command: argv[0] ?? 'help',
+    // Bare `ugc` opens the interactive session; that is the common case.
+    command: argv[0] ?? 'new',
     positional: [],
     refs: [],
     n: 1,
+    concurrency: 1,
     noAudio: false,
     dryRun: false,
   };
@@ -116,8 +139,19 @@ function parseArgs(argv: string[]): Args {
         args.model = needsValue('--model', argv[++i]);
         break;
       case '--duration':
-        args.duration = Number(needsValue('--duration', argv[++i]));
+        args.duration = parseDuration(
+          Number(needsValue('--duration', argv[++i])),
+        );
         break;
+      case '--resolution': {
+        const value = needsValue('--resolution', argv[++i]);
+        // Accept the tier names people actually say, as well as WxH.
+        args.resolution =
+          value in RESOLUTION_TIERS
+            ? RESOLUTION_TIERS[value as ResolutionTier]
+            : parseResolution(value);
+        break;
+      }
       case '--aspect':
         args.aspect = parseAspectRatio(needsValue('--aspect', argv[++i]));
         break;
@@ -132,6 +166,10 @@ function parseArgs(argv: string[]): Args {
         break;
       case '--dry-run':
         args.dryRun = true;
+        break;
+      case '--concurrency':
+      case '-j':
+        args.concurrency = Number(needsValue('--concurrency', argv[++i]));
         break;
       default:
         if (arg.startsWith('--')) throw new Error(`Unknown flag: ${arg}`);
@@ -168,8 +206,34 @@ function applyOverrides(config: Config, args: Args): Config {
     ...(args.model ? { model: args.model } : {}),
     ...(args.duration ? { duration: args.duration } : {}),
     ...(args.aspect ? { aspectRatio: args.aspect } : {}),
+    ...(args.resolution ? { resolution: args.resolution } : {}),
     ...(args.noAudio ? { generateAudio: false } : {}),
   };
+}
+
+/**
+ * Runs jobs with a fixed number in flight. Generation is minutes of waiting on
+ * a remote queue, so serialising a batch wastes almost all of the wall time —
+ * but an unbounded fan-out just trades that for rate-limit errors.
+ */
+async function pool<T>(
+  items: T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<void>,
+): Promise<void> {
+  let next = 0;
+
+  const runners = Array.from(
+    { length: Math.max(1, Math.min(limit, items.length)) },
+    async () => {
+      while (next < items.length) {
+        const index = next++;
+        await worker(items[index], index);
+      }
+    },
+  );
+
+  await Promise.all(runners);
 }
 
 async function runPrompts(prompts: string[], args: Args) {
@@ -186,13 +250,18 @@ async function runPrompts(prompts: string[], args: Args) {
   const total = prompts.length * args.n;
   console.log(
     `\n${config.model} · ${config.mode} · ${config.duration}s · ${config.aspectRatio}` +
+      ` · ${resolutionTier(config.resolution)}` +
       `${avatar ? ` · avatar: ${avatar.name}` : ''}` +
       `${config.mode !== 't2v' && config.refs.length ? ` · ref: ${config.refs.join(', ')}` : ''}`,
   );
 
   if (args.dryRun) {
     for (const [index, prompt] of prompts.entries()) {
-      console.log(`\n─── clip ${index + 1}/${prompts.length} ${'─'.repeat(40)}`);
+      console.log(
+        `\n─── prompt ${index + 1}/${prompts.length}` +
+          `${args.n > 1 ? ` · ${args.n} variations, seeds ${baseSeed ?? '?'}…` : ''} ` +
+          '─'.repeat(30),
+      );
       console.log(`\nPROMPT SENT TO VEO:\n\n${buildPrompt(prompt, config)}\n`);
       console.log(
         `FIRST FRAME: ${
@@ -212,37 +281,50 @@ async function runPrompts(prompts: string[], args: Args) {
     console.log(`\nDry run — nothing sent, nothing charged.\n`);
     return;
   }
-  console.log(`Generating ${total} clip${total === 1 ? '' : 's'}...\n`);
+  // Flatten prompt x variation into one job list so the pool can interleave
+  // them; a variation is just the same prompt at a different seed offset.
+  const jobs = prompts.flatMap((prompt) =>
+    Array.from({ length: args.n }, (_, variation) => ({
+      prompt,
+      variation,
+      seed: baseSeed !== undefined ? baseSeed + variation : undefined,
+    })),
+  );
 
-  let done = 0;
+  const concurrency = Math.min(args.concurrency, jobs.length);
+  console.log(
+    `Generating ${total} clip${total === 1 ? '' : 's'}` +
+      `${concurrency > 1 ? `, ${concurrency} at a time` : ''}...\n`,
+  );
+
   let failed = 0;
 
-  for (const prompt of prompts) {
-    for (let variation = 0; variation < args.n; variation++) {
-      const index = ++done;
-      const suffix = args.n > 1 ? ` (${variation + 1}/${args.n})` : '';
-      const seed = baseSeed !== undefined ? baseSeed + variation : undefined;
+  await pool(jobs, concurrency, async (job, index) => {
+    const tag = `[${index + 1}/${total}]`;
+    const suffix = args.n > 1 ? ` (v${job.variation + 1})` : '';
 
-      process.stdout.write(`[${index}/${total}] ${prompt.slice(0, 60)}${suffix} ... `);
-      const started = Date.now();
+    // Concurrent jobs finish out of order, so each line has to name its own
+    // job rather than relying on position.
+    console.log(`${tag} start${suffix} · ${job.prompt.slice(0, 56)}`);
+    const started = Date.now();
 
-      try {
-        const { file, warnings } = await generateClip({
-          prompt,
-          config,
-          seed,
-          label: avatar ? `${avatar.name} ${prompt}` : prompt,
-        });
-        const secs = ((Date.now() - started) / 1000).toFixed(0);
-        console.log(`done in ${secs}s → ${relative(process.cwd(), file)}`);
-        for (const warning of warnings) console.log(`      ⚠ ${warning}`);
-      } catch (err) {
-        failed++;
-        console.log('FAILED');
-        console.error(`      ${explainError(err).split('\n').join('\n      ')}\n`);
-      }
+    try {
+      const { file, warnings } = await generateClip({
+        prompt: job.prompt,
+        config,
+        seed: job.seed,
+        label: avatar ? `${avatar.name} ${job.prompt}` : job.prompt,
+      });
+      const secs = ((Date.now() - started) / 1000).toFixed(0);
+      console.log(`${tag} done in ${secs}s → ${relative(process.cwd(), file)}`);
+      for (const warning of warnings) console.log(`${tag}   ⚠ ${warning}`);
+    } catch (err) {
+      failed++;
+      console.error(
+        `${tag} FAILED\n      ${explainError(err).split('\n').join('\n      ')}\n`,
+      );
     }
-  }
+  });
 
   console.log(
     `\n${total - failed}/${total} succeeded${failed ? ` · ${failed} failed` : ''}` +
@@ -250,6 +332,138 @@ async function runPrompts(prompts: string[], args: Args) {
   );
 
   if (failed) process.exitCode = 1;
+}
+
+/** Rough list rates per output second at 720p, used only for the estimate. */
+const RATE_PER_SECOND: Record<string, number> = {
+  'veo-3.1-fast-generate-preview': 0.1,
+  'veo-3.1-generate-preview': 0.4,
+};
+
+function estimateCost(model: string, duration: number, clips: number): string {
+  const rate = RATE_PER_SECOND[model];
+  return rate === undefined
+    ? 'unknown — check Google pricing for this model'
+    : `~$${(rate * duration * clips).toFixed(2)}`;
+}
+
+/**
+ * Walks through one generation interactively. Everything it collects maps onto
+ * the same flags `gen` takes, so anything set here can be scripted later.
+ */
+async function runInteractive() {
+  const config = await loadConfig();
+  const registry = await loadAvatars();
+  const avatars = Object.values(registry);
+
+  console.log('\n\x1b[1mugc\x1b[0m — face-consistent UGC clips');
+
+  const avatarName = await select<string | undefined>(
+    'Avatar',
+    [
+      ...avatars.map((a) => ({
+        value: a.name as string | undefined,
+        label: a.name,
+        hint: `${a.refs.length} ref${a.refs.length === 1 ? '' : 's'} · seed ${a.seed}`,
+      })),
+      {
+        value: undefined,
+        label: 'none',
+        hint: 'text-only, no face reference',
+      },
+    ],
+    0,
+  );
+
+  if (!avatars.length && avatarName) {
+    throw new Error('No avatars registered — run: ugc avatar add <name> <photo>');
+  }
+
+  const prompt = await askText('What happens in the clip?');
+
+  const model = await select(
+    'Model',
+    Object.entries(RATE_PER_SECOND).map(([id, rate]) => ({
+      value: id,
+      label: id,
+      hint: `~$${rate.toFixed(2)}/s`,
+    })),
+    0,
+  );
+
+  const aspectRatio = await select(
+    'Aspect ratio',
+    [
+      { value: '9:16' as const, label: '9:16', hint: 'vertical — TikTok, Reels, Shorts' },
+      { value: '16:9' as const, label: '16:9', hint: 'landscape — YouTube' },
+    ],
+    config.aspectRatio === '16:9' ? 1 : 0,
+  );
+
+  const duration = await select(
+    'Duration',
+    DURATIONS.map((seconds) => ({
+      value: seconds,
+      label: `${seconds}s`,
+      hint: `${estimateCost(model, seconds, 1)} per clip`,
+    })),
+    DURATIONS.indexOf(config.duration as (typeof DURATIONS)[number]) >= 0
+      ? DURATIONS.indexOf(config.duration as (typeof DURATIONS)[number])
+      : 2,
+  );
+
+  const resolution = await select(
+    'Resolution',
+    (Object.keys(RESOLUTION_TIERS) as ResolutionTier[]).map((tier) => ({
+      value: RESOLUTION_TIERS[tier],
+      label: tier,
+      hint: tier === '1080p' ? 'sharper, costs more on some models' : 'standard',
+    })),
+    0,
+  );
+
+  const clips = await askNumber('How many clips?', { min: 1, max: 20, fallback: 1 });
+
+  const concurrency =
+    clips === 1
+      ? 1
+      : await askNumber('How many at a time?', {
+          min: 1,
+          max: Math.min(clips, 5),
+          fallback: Math.min(clips, 3),
+        });
+
+  heading('Ready');
+  console.log(
+    `  ${clips} clip${clips === 1 ? '' : 's'} · ${model} · ${duration}s · ` +
+      `${aspectRatio} · ${resolutionTier(resolution)}` +
+      `${avatarName ? ` · avatar ${avatarName}` : ' · no avatar'}`,
+  );
+  console.log(`  Estimated cost: \x1b[1m${estimateCost(model, duration, clips)}\x1b[0m`);
+  note('  You are only charged for clips that generate successfully.');
+
+  if (!(await confirm('Generate?'))) {
+    console.log('\nCancelled — nothing sent.\n');
+    return;
+  }
+
+  closeUi();
+
+  await runPrompts([prompt], {
+    command: 'gen',
+    positional: [],
+    refs: [],
+    avatar: avatarName,
+    model,
+    aspect: aspectRatio,
+    duration,
+    n: clips,
+    concurrency,
+    noAudio: false,
+    dryRun: false,
+    ...(avatarName ? {} : { mode: 't2v' as const }),
+    resolution,
+  });
 }
 
 /**
@@ -417,6 +631,10 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
 
   switch (args.command) {
+    case 'new':
+      await runInteractive();
+      break;
+
     case 'gen': {
       const prompt = args.positional.join(' ').trim();
       if (!prompt) throw new Error('gen needs a prompt: ugc gen "<prompt>"');
@@ -464,7 +682,11 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error(`\n${explainError(err)}\n`);
-  process.exitCode = 1;
-});
+main()
+  .catch((err) => {
+    console.error(`\n${explainError(err)}\n`);
+    process.exitCode = 1;
+  })
+  // An open readline handle keeps the event loop alive, so the process would
+  // hang after an interactive run instead of exiting.
+  .finally(closeUi);

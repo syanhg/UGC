@@ -33,11 +33,49 @@ export interface Config {
   stylePrompt: string;
 }
 
+/**
+ * What Veo 3.1 actually accepts. Kept here so the interactive pickers and the
+ * flag validators cannot drift apart, and so an invalid combination fails
+ * locally rather than after a round trip.
+ */
+export const ASPECT_RATIOS = ['9:16', '16:9'] as const;
+export const DURATIONS = [4, 6, 8] as const;
+export const RESOLUTION_TIERS = {
+  '720p': '1280x720',
+  '1080p': '1920x1080',
+} as const satisfies Record<string, Resolution>;
+
+export type ResolutionTier = keyof typeof RESOLUTION_TIERS;
+
+/** Names the tier a stored WxH belongs to, for display. */
+export function resolutionTier(value: Resolution | undefined): string {
+  if (!value) return 'default';
+
+  const found = Object.entries(RESOLUTION_TIERS).find(
+    ([, dims]) => dims === value,
+  );
+  return found?.[0] ?? value;
+}
+
 export function parseAspectRatio(value: string): AspectRatio {
   if (!/^\d+:\d+$/.test(value)) {
     throw new Error(`Aspect ratio must look like "9:16" (got "${value}")`);
   }
+  if (!ASPECT_RATIOS.includes(value as (typeof ASPECT_RATIOS)[number])) {
+    throw new Error(
+      `Veo supports ${ASPECT_RATIOS.join(' and ')} only (got "${value}")`,
+    );
+  }
   return value as AspectRatio;
+}
+
+export function parseDuration(value: number): number {
+  if (!DURATIONS.includes(value as (typeof DURATIONS)[number])) {
+    throw new Error(
+      `Duration must be ${DURATIONS.join(', ')} seconds (got ${value})`,
+    );
+  }
+  return value;
 }
 
 /**
