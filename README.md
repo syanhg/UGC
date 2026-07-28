@@ -73,8 +73,7 @@ Clips land in `./out` relative to where you ran the command.
 A clip takes minutes, almost all of it waiting on Google's queue, so `-j 4`
 runs a batch roughly four times faster. Past 5 you trade waiting for
 rate-limit errors. One failure doesn't stop the others, and the exit code is
-non-zero if any failed. If a clip renders but the download fails it is not lost. Google keeps it for 48
-hours, `ugc` retries automatically, and `ugc pull` collects anything stranded.
+non-zero if any failed.
 
 ## Avatars
 
