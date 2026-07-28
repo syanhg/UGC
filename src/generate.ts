@@ -2,8 +2,8 @@ import { experimental_generateVideo as generateVideo, NoVideoGeneratedError } fr
 import { google } from '@ai-sdk/google';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { extname, basename } from 'node:path';
-import { fromRoot } from './paths.ts';
+import { extname, basename, isAbsolute } from 'node:path';
+import { fromCwd, fromData } from './paths.ts';
 import { MEDIA_TYPES, type Config } from './config.ts';
 import { fetchWithRetry } from './files.ts';
 
@@ -14,8 +14,9 @@ import { fetchWithRetry } from './files.ts';
 async function loadRef(path: string): Promise<string> {
   if (/^https?:\/\//.test(path)) return path;
 
-  // Avatar refs are stored project-relative; --ref is made absolute by the CLI.
-  const abs = fromRoot(path);
+  // Avatar refs are stored relative to the data directory; --ref is made
+  // absolute by the CLI, so resolving it against cwd leaves it unchanged.
+  const abs = isAbsolute(path) ? path : fromData(path);
   if (!existsSync(abs)) {
     throw new Error(
       `Reference image not found: ${path}\n` +
@@ -164,11 +165,12 @@ export async function generateClip({
     },
   });
 
-  await mkdir(fromRoot(config.outDir), { recursive: true });
+  // Clips land where you ran the command, not next to the install.
+  await mkdir(fromCwd(config.outDir), { recursive: true });
 
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const name = `${stamp}_${slugify(label ?? prompt)}.mp4`;
-  const file = fromRoot(config.outDir, name);
+  const file = fromCwd(config.outDir, name);
 
   await writeFile(file, video.uint8Array);
 
@@ -183,37 +185,67 @@ export async function generateClip({
 }
 
 /**
- * The Files API takes its key as a query parameter, so a failed download quotes
- * the key back inside the error message — and from there into logs and scroll
- * buffers. Strip it before anything is printed.
+ * Last line of defence before anything reaches a terminal, a log file, or a
+ * pasted bug report. Requests here send the key as a header rather than a query
+ * parameter, but the SDK, a proxy, or a future call site can still put it in a
+ * URL — so strip the key out of every string on its way to being printed,
+ * whatever shape it arrives in.
  */
-function redact(message: string): string {
-  return message.replace(/([?&]key=)[^&\s]+/g, '$1<redacted>');
+export function redact(message: string): string {
+  const key = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+
+  return (
+    message
+      // key=... and x-goog-api-key: ... , however they were spelled.
+      .replace(/([?&](?:key|api_?key)=)[^&\s"']+/gi, '$1<redacted>')
+      .replace(
+        /((?:x-goog-api-key|authorization|bearer)["'\s:=]+)[^\s"',}]+/gi,
+        '$1<redacted>',
+      )
+      // The literal value, in case it appeared somewhere unanticipated.
+      .replaceAll(key && key.length > 8 ? key : '\0<no key set>\0', '<redacted>')
+      // Google keys have a fixed, recognisable shape; catch a stray one even if
+      // it is not the key this process is running with.
+      .replace(/AIza[0-9A-Za-z_-]{20,}/g, '<redacted>')
+  );
+}
+
+/** Errors nest their real cause; the message alone often says nothing useful. */
+function fullMessage(err: unknown): string {
+  const parts: string[] = [];
+
+  for (let current = err, depth = 0; current && depth < 4; depth++) {
+    parts.push(current instanceof Error ? current.message : String(current));
+    current = current instanceof Error ? (current.cause as unknown) : undefined;
+  }
+
+  return redact(parts.filter(Boolean).join(': '));
 }
 
 export function explainError(err: unknown): string {
   if (NoVideoGeneratedError.isInstance(err)) {
     return (
       `The model accepted the request but returned no video.\n` +
-      `Cause: ${err.cause ?? 'unknown'}\n` +
+      `Cause: ${err.cause ? redact(String(err.cause)) : 'unknown'}\n` +
       `This is usually a safety filter — try softening the prompt or using a different reference photo.`
     );
   }
 
-  const message = redact(err instanceof Error ? err.message : String(err));
+  const message = fullMessage(err);
 
   if (/api key|unauthor|401|403/i.test(message)) {
     return (
       `Auth failed: ${message}\n\n` +
-      `Set your Gemini API key:\n  export GOOGLE_GENERATIVE_AI_API_KEY="..."\n` +
+      `Set your Gemini API key:\n  ugc setup\n` +
+      `or:  export GOOGLE_GENERATIVE_AI_API_KEY="..."\n` +
       `Get one at https://aistudio.google.com/apikey`
     );
   }
 
-  // Figma failures travel through the same reporting path, so they must be
-  // matched before the Veo branches — a 429 from Figma is not a Veo billing
+  // Paper failures travel through the same reporting path, so they must be
+  // matched before the Veo branches — a 429 from Paper is not a Veo billing
   // problem, and saying so sends you to fix the wrong thing.
-  if (/figma/i.test(message)) return message;
+  if (/paper/i.test(message)) return message;
 
   if (/billing|quota|resource_exhausted|free tier/i.test(message)) {
     return (

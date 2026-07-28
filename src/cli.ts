@@ -1,14 +1,16 @@
 #!/usr/bin/env node
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { basename, relative, resolve } from 'node:path';
 import {
+  configSources,
   loadConfig,
   parseAspectRatio,
   parseDuration,
   parseResolution,
   resolutionTier,
   DURATIONS,
+  GLOBAL_CONFIG_PATH,
   RESOLUTION_TIERS,
   type AspectRatio,
   type Config,
@@ -39,22 +41,36 @@ import {
   removeAvatar,
   photoLabel,
   slugifyName,
+  AVATARS_PATH,
   type Avatar,
 } from './avatars.ts';
 import { downloadPhoto, readAvatars } from './paper.ts';
-import { downloadClip, listGeneratedClips } from './files.ts';
-import { fromCwd, fromRoot } from './paths.ts';
+import { authHeaders, downloadClip, listGeneratedClips } from './files.ts';
+import { DATA_DIR, ensureDataDir, fromCwd, fromData } from './paths.ts';
+import { Progress, estimateRenderMs } from './progress.ts';
 
-// Load .env so the API key doesn't have to be exported in every shell.
-// Real environment variables still win over the file.
-const ENV_FILE = fromRoot('.env');
-if (existsSync(ENV_FILE)) process.loadEnvFile(ENV_FILE);
+/**
+ * Loads .env so the API key doesn't have to be exported in every shell. A
+ * project-local file wins over the global one, and both lose to a real
+ * environment variable — process.loadEnvFile does not overwrite what is set,
+ * so the first file to define a name is the one that takes effect.
+ *
+ * Called from main() rather than at import time: a first run may migrate an
+ * older layout's .env into the data directory, and that has to happen before
+ * this reads it, or the key looks missing until the next invocation.
+ */
+function loadEnvFiles(): void {
+  for (const file of [fromCwd('.env'), fromData('.env')]) {
+    if (existsSync(file)) process.loadEnvFile(file);
+  }
+}
 
 const HELP = `
 ugc — generate short, face-consistent UGC clips
 
 USAGE
   ugc                             Interactive: pick avatar, prompt, and settings
+  ugc setup                       Store your Gemini API key and check it works
   ugc gen "<prompt>" [flags]      Generate one clip
   ugc batch <file> [flags]        Generate one clip per non-empty line of <file>
   ugc avatar add <name> <photo...> [flags]   Register a fixed avatar
@@ -63,6 +79,7 @@ USAGE
   ugc avatar rm <name>            Remove an avatar and its copied photos
   ugc pull                        Collect clips that rendered but failed to download
   ugc models                      List Veo models with rough per-second rates
+  ugc where                       Show where avatars, config, and the key live
   ugc help                        Show this
 
 FLAGS
@@ -82,11 +99,15 @@ FLAGS
   --dry-run          Show the assembled prompt and settings; generate nothing
 
 EXAMPLES
+  ugc setup                               # first run: paste your API key
   ugc                                     # guided, with a cost estimate
   ugc avatar add sofia ~/photos/sofia-1.jpg --notes "mid-20s, dark hair"
   ugc gen "holds up the serum bottle: 'three days. three.'" --avatar sofia
   ugc gen "unboxes the package on her bed" --avatar sofia --n 4 -j 4
   ugc batch shots.txt --avatar sofia --resolution 1080p -j 3
+
+Avatars, config, and your key live in ~/.ugc (override with UGC_HOME).
+Clips are written to ./out relative to where you run the command.
 `.trim();
 
 interface Args {
@@ -339,15 +360,19 @@ async function runPrompts(prompts: string[], args: Args) {
 
   let failed = 0;
   let stranded = 0;
+  const problems: string[] = [];
+
+  const progress = new Progress(
+    jobs.map(
+      (job) =>
+        `${job.prompt.slice(0, 44)}${args.n > 1 ? ` (v${job.variation + 1})` : ''}`,
+    ),
+    estimateRenderMs(config.model, config.duration),
+  );
+  progress.start();
 
   await pool(jobs, concurrency, async (job, index) => {
-    const tag = `[${index + 1}/${total}]`;
-    const suffix = args.n > 1 ? ` (v${job.variation + 1})` : '';
-
-    // Concurrent jobs finish out of order, so each line has to name its own
-    // job rather than relying on position.
-    console.log(`${tag} start${suffix} · ${job.prompt.slice(0, 56)}`);
-    const started = Date.now();
+    progress.began(index);
 
     try {
       const { file, warnings } = await generateClip({
@@ -356,19 +381,26 @@ async function runPrompts(prompts: string[], args: Args) {
         seed: job.seed,
         label: avatar ? `${avatar.name} ${job.prompt}` : job.prompt,
       });
-      const secs = ((Date.now() - started) / 1000).toFixed(0);
-      console.log(`${tag} done in ${secs}s → ${relative(process.cwd(), file)}`);
-      for (const warning of warnings) console.log(`${tag}   ⚠ ${warning}`);
+      progress.finished(index, relative(process.cwd(), file));
+      for (const warning of warnings) {
+        problems.push(`[${index + 1}/${total}] ⚠ ${warning}`);
+      }
     } catch (err) {
       failed++;
       const message = err instanceof Error ? err.message : String(err);
       if (/could not be downloaded/i.test(message)) stranded++;
 
-      console.error(
-        `${tag} FAILED\n      ${explainError(err).split('\n').join('\n      ')}\n`,
+      progress.failed(index, message.split('\n')[0].slice(0, 60));
+      // Held back until the bars stop, so a multi-line error cannot be
+      // overwritten by the next redraw.
+      problems.push(
+        `[${index + 1}/${total}] FAILED\n      ${explainError(err).split('\n').join('\n      ')}`,
       );
     }
   });
+
+  progress.stop();
+  if (problems.length) console.error(`\n${problems.join('\n')}\n`);
 
   // A clip that rendered but failed to download is finished work already paid
   // for. Collecting it should not depend on the user knowing to run `pull`.
@@ -418,14 +450,30 @@ async function runInteractive() {
 
   console.log('\n\x1b[1mugc\x1b[0m — face-consistent UGC clips');
 
-  // Synced avatars sort first: when Paper is the source of truth, the layer
-  // you just edited there is the one you are most likely to want.
+  if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
+    throw new Error(
+      'No Gemini API key found. Set one up first:\n  ugc setup',
+    );
+  }
+
+  // A first run has nothing registered, and the guided session is exactly where
+  // someone lands before reading about avatars. Say what is missing rather than
+  // offering a picker with one useless entry in it.
+  if (!avatars.length) {
+    note(
+      '\n  No avatars registered yet — this clip will be text-only.\n' +
+        '  For a consistent face, register one:  ugc avatar add <name> <photo.jpg>',
+    );
+  }
+
+  // Synced avatars sort first: when a design file is the source of truth, the
+  // layer you just edited there is the one you are most likely to want.
   const ordered = [...avatars].sort(
     (a, b) => Number(Boolean(b.source)) - Number(Boolean(a.source)),
   );
 
   const avatarName = await select<string | undefined>(
-    'Avatar — one Paper layer is one character',
+    'Avatar — the face every clip is built around',
     [
       ...ordered.map((a) => ({
         value: a.name as string | undefined,
@@ -442,10 +490,6 @@ async function runInteractive() {
     ],
     0,
   );
-
-  if (!avatars.length && avatarName) {
-    throw new Error('No avatars registered — run: ugc avatar add <name> <photo>');
-  }
 
   // Which photo opens the clip is the single biggest lever on how it looks in
   // i2v, so ask rather than quietly taking the first.
@@ -619,7 +663,8 @@ async function runAvatarSync(args: Args) {
   }
 
   const existing = await loadAvatars();
-  const scratch = fromRoot('.paper-sync');
+  const scratch = fromData('.paper-sync');
+  ensureDataDir();
   await mkdir(scratch, { recursive: true });
 
   let changed = 0;
@@ -796,16 +841,9 @@ const MODEL_NOTES: Record<string, string> = {
  * goes stale and costs you a failed generation to discover.
  */
 async function listModels() {
-  const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
-  if (!apiKey) {
-    throw new Error(
-      'GOOGLE_GENERATIVE_AI_API_KEY is not set — needed to list models.\n' +
-        'Get one at https://aistudio.google.com/apikey',
-    );
-  }
-
   const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`,
+    'https://generativelanguage.googleapis.com/v1beta/models?pageSize=200',
+    { headers: authHeaders() },
   );
   if (!res.ok) {
     throw new Error(`Model listing failed: ${res.status} ${res.statusText}`);
@@ -836,8 +874,139 @@ async function listModels() {
   );
 }
 
+const ENV_PATH = fromData('.env');
+
+/**
+ * Stores the API key in the data directory so it does not have to be exported
+ * in every shell. Written 0600: it is a billable credential, and a key that
+ * leaks is somebody else's video generation on your card.
+ */
+async function runSetup() {
+  heading('ugc setup');
+  console.log(`  Config and avatars live in ${DATA_DIR}\n`);
+
+  if (process.env.GOOGLE_GENERATIVE_AI_API_KEY && !existsSync(ENV_PATH)) {
+    note('  A key is already set in your environment; this will not change that.');
+  }
+
+  console.log(
+    '  Get a Gemini API key at https://aistudio.google.com/apikey\n' +
+      '  Veo is not on the free tier — the key\'s Google Cloud project needs\n' +
+      '  billing enabled.\n',
+  );
+
+  const key = (await askText('Paste your Gemini API key')).trim();
+
+  // Fail on something that cannot possibly be a key rather than storing it and
+  // surfacing a confusing 403 on the first paid call.
+  if (key.length < 20 || /\s/.test(key)) {
+    throw new Error('That does not look like an API key — nothing was saved.');
+  }
+
+  ensureDataDir();
+
+  // Preserve any other variables already in the file; only the key is replaced.
+  const existing = existsSync(ENV_PATH) ? await readFile(ENV_PATH, 'utf8') : '';
+  const withoutKey = existing
+    .split('\n')
+    .filter((line) => !/^\s*GOOGLE_GENERATIVE_AI_API_KEY\s*=/.test(line))
+    .join('\n')
+    .trim();
+
+  await writeFile(
+    ENV_PATH,
+    `${withoutKey ? `${withoutKey}\n` : ''}GOOGLE_GENERATIVE_AI_API_KEY=${key}\n`,
+    { mode: 0o600 },
+  );
+  await chmod(ENV_PATH, 0o600);
+
+  console.log(`\n  ✓ saved to ${ENV_PATH} (readable only by you)`);
+
+  process.env.GOOGLE_GENERATIVE_AI_API_KEY = key;
+
+  console.log('\n  Checking the key...');
+  try {
+    await listModels();
+  } catch (err) {
+    console.error(`\n  ✗ ${explainError(err)}\n`);
+    process.exitCode = 1;
+    return;
+  }
+
+  console.log(
+    'Next:\n' +
+      '  ugc avatar add <name> <photo.jpg>   register a face\n' +
+      '  ugc                                 generate a clip\n',
+  );
+}
+
+/** Where everything lives. The first thing worth knowing when something is missing. */
+async function runWhere() {
+  const registry = await loadAvatars();
+  const count = Object.keys(registry).length;
+  const sources = configSources();
+
+  console.log(`\n  data dir    ${DATA_DIR}${process.env.UGC_HOME ? '  (UGC_HOME)' : ''}`);
+  console.log(
+    `  avatars     ${AVATARS_PATH}` +
+      `  ${existsSync(AVATARS_PATH) ? `(${count} registered)` : '(none yet)'}`,
+  );
+  console.log(`  photos      ${fromData('refs')}`);
+  console.log(
+    `  api key     ${
+      process.env.GOOGLE_GENERATIVE_AI_API_KEY
+        ? existsSync(ENV_PATH)
+          ? ENV_PATH
+          : 'set in the environment'
+        : 'not set — run: ugc setup'
+    }`,
+  );
+  console.log(
+    `  config      ${sources.length ? sources.join('\n              ') : `${GLOBAL_CONFIG_PATH}  (not created; using defaults)`}`,
+  );
+  console.log(`  output      ${fromCwd('out')}  (relative to where you run ugc)\n`);
+}
+
+/**
+ * Earlier versions kept avatars beside the source, which only worked for the
+ * one person who cloned the repo. Copy — never move — that library into the
+ * data directory the first time the new layout is used, so an existing setup
+ * keeps working and the originals stay put if anything goes wrong.
+ */
+async function migrateLegacyLibrary(command: string): Promise<void> {
+  // Nothing that only prints text should quietly move files around first.
+  if (['help', '--help', '-h'].includes(command)) return;
+
+  const legacyRoot = resolve(import.meta.dirname, '..');
+  const legacyAvatars = resolve(legacyRoot, 'avatars.json');
+
+  if (existsSync(AVATARS_PATH) || !existsSync(legacyAvatars)) return;
+
+  ensureDataDir();
+  await cp(legacyAvatars, AVATARS_PATH);
+
+  const legacyRefs = resolve(legacyRoot, 'refs');
+  if (existsSync(legacyRefs)) {
+    await cp(legacyRefs, fromData('refs'), { recursive: true });
+  }
+
+  const legacyEnv = resolve(legacyRoot, '.env');
+  if (existsSync(legacyEnv) && !existsSync(ENV_PATH)) {
+    await cp(legacyEnv, ENV_PATH);
+    await chmod(ENV_PATH, 0o600);
+  }
+
+  console.log(
+    `\nMoved your avatar library to ${DATA_DIR} so it works from anywhere.\n` +
+      `The originals under ${legacyRoot} were left untouched and can be deleted.\n`,
+  );
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+
+  await migrateLegacyLibrary(args.command);
+  loadEnvFiles();
 
   switch (args.command) {
     case 'new':
@@ -876,6 +1045,14 @@ async function main() {
 
     case 'models':
       await listModels();
+      break;
+
+    case 'setup':
+      await runSetup();
+      break;
+
+    case 'where':
+      await runWhere();
       break;
 
     case 'help':

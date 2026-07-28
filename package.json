@@ -1,20 +1,48 @@
 {
   "name": "ugc",
   "version": "0.1.0",
-  "description": "CLI for generating short, face-consistent UGC video clips",
+  "description": "CLI for generating short, face-consistent UGC video clips with Google Veo",
   "type": "module",
   "bin": {
-    "ugc": "./src/cli.ts"
+    "ugc": "dist/cli.js"
   },
   "scripts": {
     "ugc": "node src/cli.ts",
-    "typecheck": "tsc --noEmit"
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"test/**/*.test.ts\"",
+    "prepare": "npm run build"
   },
+  "keywords": [
+    "veo",
+    "video",
+    "ugc",
+    "gemini",
+    "cli",
+    "ai",
+    "video-generation"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/syanhg/UGC.git"
   },
-  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/syanhg/UGC/issues"
+  },
+  "homepage": "https://github.com/syanhg/UGC#readme",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "files": [
+    "dist/",
+    "src/",
+    "ugc.config.example.json",
+    "shots.example.txt",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md"
+  ],
   "dependencies": {
     "@ai-sdk/google": "^4.0.25",
     "ai": "^7.0.37"

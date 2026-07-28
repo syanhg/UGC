@@ -1,6 +1,6 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { fromRoot } from './paths.ts';
+import { fromCwd, fromData } from './paths.ts';
 
 const API = 'https://generativelanguage.googleapis.com/v1beta/files';
 
@@ -27,13 +27,21 @@ export interface RemoteFile {
  */
 export async function fetchWithRetry(
   url: string,
-  { attempts = 8, signal }: { attempts?: number; signal?: AbortSignal } = {},
+  {
+    attempts = 8,
+    signal,
+    headers,
+  }: {
+    attempts?: number;
+    signal?: AbortSignal;
+    headers?: Record<string, string>;
+  } = {},
 ): Promise<Response> {
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
-      const res = await fetch(url, { redirect: 'follow', signal });
+      const res = await fetch(url, { redirect: 'follow', signal, headers });
       if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
       return res;
     } catch (err) {
@@ -50,19 +58,24 @@ export async function fetchWithRetry(
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
-function apiKey(): string {
+/**
+ * The key travels in a header, never as a `?key=` query parameter. Query
+ * strings end up in proxy logs, crash reports, and quoted back inside error
+ * messages; a header does not. Google accepts both.
+ */
+export function authHeaders(): Record<string, string> {
   const key = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
   if (!key) {
     throw new Error(
       'GOOGLE_GENERATIVE_AI_API_KEY is not set.\n' +
-        'Get one at https://aistudio.google.com/apikey',
+        'Get one at https://aistudio.google.com/apikey, then run:  ugc setup',
     );
   }
-  return key;
+  return { 'x-goog-api-key': key };
 }
 
 export async function listGeneratedClips(): Promise<RemoteFile[]> {
-  const res = await fetch(`${API}?key=${apiKey()}&pageSize=100`);
+  const res = await fetch(`${API}?pageSize=100`, { headers: authHeaders() });
   if (!res.ok) {
     throw new Error(`Listing files failed: ${res.status} ${res.statusText}`);
   }
@@ -96,7 +109,7 @@ export function localNameFor(file: RemoteFile): string {
 const MANIFEST = '.ugc-pulled.json';
 
 async function loadManifest(): Promise<Record<string, string>> {
-  const path = fromRoot(MANIFEST);
+  const path = fromData(MANIFEST);
   if (!existsSync(path)) return {};
 
   try {
@@ -110,7 +123,7 @@ async function loadManifest(): Promise<Record<string, string>> {
 export async function markPulled(file: RemoteFile, path: string): Promise<void> {
   const manifest = await loadManifest();
   manifest[fileId(file)] = path;
-  await writeFile(fromRoot(MANIFEST), `${JSON.stringify(manifest, null, 2)}\n`);
+  await writeFile(fromData(MANIFEST), `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
 export async function alreadyPulled(file: RemoteFile): Promise<boolean> {
@@ -121,16 +134,16 @@ export async function downloadClip(
   file: RemoteFile,
   outDir: string,
 ): Promise<{ path: string; skipped: boolean }> {
-  await mkdir(fromRoot(outDir), { recursive: true });
-  const path = fromRoot(outDir, localNameFor(file));
+  await mkdir(fromCwd(outDir), { recursive: true });
+  const path = fromCwd(outDir, localNameFor(file));
 
   if (existsSync(path) || (await alreadyPulled(file))) {
     return { path, skipped: true };
   }
 
-  const res = await fetchWithRetry(
-    `${API}/${fileId(file)}:download?alt=media&key=${apiKey()}`,
-  );
+  const res = await fetchWithRetry(`${API}/${fileId(file)}:download?alt=media`, {
+    headers: authHeaders(),
+  });
 
   await writeFile(path, new Uint8Array(await res.arrayBuffer()));
   await markPulled(file, path);

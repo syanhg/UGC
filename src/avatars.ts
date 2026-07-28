@@ -2,7 +2,7 @@ import { readFile, writeFile, mkdir, copyFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { basename, extname, join } from 'node:path';
 import { MEDIA_TYPES, type Mode } from './config.ts';
-import { fromCwd, fromRoot } from './paths.ts';
+import { ensureDataDir, fromCwd, fromData, within } from './paths.ts';
 
 /**
  * A registered subject. The point of the registry is that everything which
@@ -23,12 +23,12 @@ export interface AvatarSource {
 
 export interface Avatar {
   name: string;
-  /** Project-relative paths to the copies under refs/<name>/. */
+  /** Paths to the copies under <data dir>/refs/<name>/, relative to the data dir. */
   refs: string[];
   /**
-   * Display name per entry in `refs`, in the same order. Figma layer names go
-   * here, so a photo can be picked by the name it has in the design file
-   * rather than by the meaningless "01.png" it was copied to.
+   * Display name per entry in `refs`, in the same order. Design-tool layer
+   * names go here, so a photo can be picked by the name it has in the design
+   * file rather than by the meaningless "01.png" it was copied to.
    */
   photoLabels?: string[];
   /** Locked at registration so repeat runs of a prompt reproduce exactly. */
@@ -49,12 +49,12 @@ export function photoLabel(avatar: Avatar, index: number): string {
 
 type Registry = Record<string, Avatar>;
 
-export const AVATARS_PATH = fromRoot('avatars.json');
+export const AVATARS_PATH = fromData('avatars.json');
 const AVATAR_DIR = 'refs';
 
 const NAME_PATTERN = /^[a-z0-9][a-z0-9_-]*$/i;
 
-/** Turns a Figma layer name into something the registry will accept. */
+/** Turns a design-tool layer name into something the registry will accept. */
 export function slugifyName(name: string): string {
   return name
     .trim()
@@ -83,7 +83,24 @@ export async function loadAvatars(): Promise<Registry> {
 }
 
 async function saveAvatars(registry: Registry): Promise<void> {
+  ensureDataDir();
   await writeFile(AVATARS_PATH, `${JSON.stringify(registry, null, 2)}\n`);
+}
+
+/**
+ * Resolves an avatar's photo directory, refusing anything that would escape the
+ * data directory. `avatars.json` is a plain file a user can hand-edit, and this
+ * path is handed to a recursive delete — a key like "../.." must not be able to
+ * turn `ugc avatar rm` into a wipe of the home directory.
+ */
+function avatarDir(name: string): string {
+  assertValidName(name);
+  return within(fromData(AVATAR_DIR), name);
+}
+
+/** Absolute path for a stored, data-dir-relative ref. */
+export function refPath(ref: string): string {
+  return within(fromData(), ref);
 }
 
 export async function getAvatar(name: string): Promise<Avatar> {
@@ -102,7 +119,7 @@ export async function getAvatar(name: string): Promise<Avatar> {
 
   // The registry stores paths, not image data, so a moved or deleted photo
   // only surfaces here — catch it before spending a generation call on it.
-  const missing = avatar.refs.filter((ref) => !existsSync(fromRoot(ref)));
+  const missing = avatar.refs.filter((ref) => !existsSync(refPath(ref)));
   if (missing.length) {
     throw new Error(
       `Avatar "${name}" references files that no longer exist:\n  ${missing.join('\n  ')}\n` +
@@ -155,11 +172,13 @@ export async function addAvatar({
   }
 
   const dir = join(AVATAR_DIR, name);
+  const absDir = avatarDir(name);
 
   // Clear old photos so a replacement that ships fewer images does not leave
   // the extras behind and silently keep referencing them.
-  if (existing) await rm(fromRoot(dir), { recursive: true, force: true });
-  await mkdir(fromRoot(dir), { recursive: true });
+  ensureDataDir();
+  if (existing) await rm(absDir, { recursive: true, force: true });
+  await mkdir(absDir, { recursive: true });
 
   // Photos are copied in rather than referenced in place, so moving or
   // deleting the original later cannot silently change the avatar.
@@ -178,7 +197,7 @@ export async function addAvatar({
     }
 
     const dest = join(dir, `${String(index + 1).padStart(2, '0')}${ext}`);
-    await copyFile(abs, fromRoot(dest));
+    await copyFile(abs, refPath(dest));
     refs.push(dest);
   }
 
@@ -207,12 +226,13 @@ export async function removeAvatar(name: string): Promise<Avatar> {
   const avatar = registry[name];
   if (!avatar) throw new Error(`No avatar named "${name}"`);
 
+  // Resolved and bounds-checked *before* the registry is written, so a name
+  // that cannot be safely deleted fails without first losing its entry.
+  const dir = avatarDir(name);
+
   delete registry[name];
   await saveAvatars(registry);
-  await rm(fromRoot(AVATAR_DIR, name), {
-    recursive: true,
-    force: true,
-  });
+  await rm(dir, { recursive: true, force: true });
 
   return avatar;
 }

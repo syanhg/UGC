@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { fromRoot } from './paths.ts';
+import { fromCwd, fromData } from './paths.ts';
 
 export type Mode = 'i2v' | 'r2v' | 't2v';
 export type AspectRatio = `${number}:${number}`;
@@ -16,9 +16,11 @@ export const MEDIA_TYPES: Record<string, string> = {
 
 /**
  * Veo will not render recognisable people unless this is widened from its
- * default. "allow_all" additionally permits minors — avatars here are adults.
+ * default. Only the two safe settings are modelled: Veo also accepts
+ * "allow_all", which permits generating minors, and this tool refuses to pass
+ * it through — see assertPersonGeneration.
  */
-export type PersonGeneration = 'dont_allow' | 'allow_adult' | 'allow_all';
+export type PersonGeneration = 'dont_allow' | 'allow_adult';
 
 export interface Config {
   model: string;
@@ -55,6 +57,30 @@ export function resolutionTier(value: Resolution | undefined): string {
     ([, dims]) => dims === value,
   );
   return found?.[0] ?? value;
+}
+
+/**
+ * Refuses "allow_all". That setting lets Veo render minors, and this tool
+ * animates a real photograph of a face into someone speaking to camera — the
+ * one combination that has no legitimate use here. Blocked at the config
+ * boundary rather than documented as discouraged, because a default someone
+ * can flip in a JSON file is not a safeguard.
+ */
+export function assertPersonGeneration(value: string): PersonGeneration {
+  if (value === 'allow_all') {
+    throw new Error(
+      'personGeneration "allow_all" is not supported: it permits generating ' +
+        'minors. Use "allow_adult" (adults only) or "dont_allow" (no people).',
+    );
+  }
+
+  if (value !== 'allow_adult' && value !== 'dont_allow') {
+    throw new Error(
+      `personGeneration must be "allow_adult" or "dont_allow" (got "${value}")`,
+    );
+  }
+
+  return value;
 }
 
 export function parseAspectRatio(value: string): AspectRatio {
@@ -107,25 +133,46 @@ const DEFAULTS: Config = {
   stylePrompt: '',
 };
 
-export const CONFIG_PATH = fromRoot('ugc.config.json');
+/**
+ * The global config, shared by every project. Lives beside the avatar library
+ * so a single `ugc` install has one set of defaults wherever it is run.
+ */
+export const GLOBAL_CONFIG_PATH = fromData('config.json');
+
+/**
+ * A per-directory override, if the directory you are standing in has one. Lets
+ * one campaign keep its own framing and aspect ratio without disturbing the
+ * global defaults.
+ */
+export const LOCAL_CONFIG_NAME = 'ugc.config.json';
+
+async function readConfigFile(path: string): Promise<Partial<Config>> {
+  try {
+    return JSON.parse(await readFile(path, 'utf8')) as Partial<Config>;
+  } catch (err) {
+    throw new Error(`${path} is not valid JSON: ${(err as Error).message}`);
+  }
+}
+
+/** Config files that apply here, lowest precedence first. */
+export function configSources(): string[] {
+  const local = fromCwd(LOCAL_CONFIG_NAME);
+  return [GLOBAL_CONFIG_PATH, local].filter(
+    (path, index, all) => existsSync(path) && all.indexOf(path) === index,
+  );
+}
 
 export async function loadConfig(): Promise<Config> {
-  if (!existsSync(CONFIG_PATH)) return { ...DEFAULTS };
+  let config = { ...DEFAULTS };
 
-  let parsed: Partial<Config>;
-  try {
-    parsed = JSON.parse(await readFile(CONFIG_PATH, 'utf8'));
-  } catch (err) {
-    throw new Error(
-      `ugc.config.json is not valid JSON: ${(err as Error).message}`,
-    );
+  for (const path of configSources()) {
+    config = { ...config, ...(await readConfigFile(path)) };
   }
 
-  const config = { ...DEFAULTS, ...parsed };
-
-  // Validate the string-shaped fields here so a typo in the config file fails
+  // Validate the string-shaped fields here so a typo in a config file fails
   // immediately instead of surfacing as a provider error mid-batch.
   config.aspectRatio = parseAspectRatio(config.aspectRatio);
+  config.personGeneration = assertPersonGeneration(config.personGeneration);
   if (config.resolution) config.resolution = parseResolution(config.resolution);
 
   return config;

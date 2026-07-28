@@ -1,9 +1,17 @@
 node_modules/
+dist/
+*.tgz
+
+# Secrets. Never commit these.
+.env
+.env.*
+!.env.example
+
+# Generated clips, and the local avatar library from before it moved to ~/.ugc.
 out/
 refs/
-.env
-.env.local
 avatars.json
-!refs/.gitkeep
 .ugc-pulled.json
 .paper-sync/
+
+.DS_Store

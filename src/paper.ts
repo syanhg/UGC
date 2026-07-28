@@ -191,7 +191,24 @@ const EXTENSIONS: Record<string, string> = Object.fromEntries(
 export async function downloadPhoto(
   photo: PaperPhoto,
 ): Promise<{ data: Uint8Array; ext: string }> {
-  const res = await fetch(photo.url, { redirect: 'follow' });
+  // The URL comes out of a design file's style data, so it is only as
+  // trustworthy as that file. Restrict it to http(s) before fetching: a
+  // `file:` or `data:` fill would otherwise read local files into an avatar.
+  let url: URL;
+  try {
+    url = new URL(photo.url);
+  } catch {
+    throw new Error(`${photo.label}: image fill is not a valid URL`);
+  }
+
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+    throw new Error(
+      `${photo.label}: refusing to fetch a "${url.protocol}" image fill ` +
+        `— only http and https are allowed`,
+    );
+  }
+
+  const res = await fetch(url, { redirect: 'follow' });
   if (!res.ok) {
     throw new Error(`${photo.label}: ${res.status} ${res.statusText}`);
   }
