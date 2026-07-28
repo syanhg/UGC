@@ -10,8 +10,7 @@
     "ugc": "node src/cli.ts",
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "test": "node --test \"test/**/*.test.ts\"",
-    "prepack": "npm run build"
+    "test": "node --test \"test/**/*.test.ts\""
   },
   "keywords": [
     "veo",

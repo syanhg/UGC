@@ -1,5 +1,7 @@
 # ugc
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 CLI for generating short, face-consistent UGC clips. Point it at a reference
 photo, give it a line of dialogue or action, get an 8-second vertical video. Register a subject once, and every clip after it reuses the same photos, seed,
 and identity description, which is what keeps the face from drifting between
@@ -136,28 +138,9 @@ ChatGPT, Midjourney, or similar, and register that as your avatar. It sidesteps
 the consent and likeness problems entirely, and a synthetic face is usually
 cleaner and better lit than a real photo anyway.
 
-If you do use a real person, get written consent, and never use a photo of a
-minor. Follow Google's
+Follow Google's
 [Generative AI Prohibited Use Policy](https://policies.google.com/terms/generative-ai/use-policy)
 and label synthetic media where your platform requires it.
-
-## Security
-
-Your key is stored at `~/.ugc/.env` mode `0600`, sent as a header rather than a
-URL parameter, and stripped from error messages. The only remote service
-contacted is the Gemini API. See [SECURITY.md](SECURITY.md) to report an issue.
-
-## Development
-
-```bash
-npm run ugc -- gen "..." --dry-run   # runs from src/, no build
-npm run build                        # required before committing src/ changes
-npm run typecheck
-npm test
-```
-
-Node runs the TypeScript in `src/` directly but refuses to strip types under
-`node_modules`, so `bin` points at compiled `dist/`, which is committed.
 
 ## License
 
