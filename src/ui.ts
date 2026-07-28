@@ -70,6 +70,7 @@ export function closeUi(): void {
 
 const DIM = '\x1b[2m';
 const BOLD = '\x1b[1m';
+const GREEN = '\x1b[32m';
 const RESET = '\x1b[0m';
 
 export function heading(text: string): void {
@@ -108,14 +109,20 @@ export async function select<T>(
   }
 
   for (;;) {
-    const answer = (
-      await ask(`  > [${defaultIndex + 1}] `)
-    ).trim();
-    if (!answer) return choices[defaultIndex].value;
+    const answer = (await ask(`  > [${defaultIndex + 1}] `)).trim();
+
+    // Echo the resolved choice. Without it there is no way to tell a typed
+    // selection from a defaulted one, or to catch a mistake before the end.
+    const confirmChoice = (choice: Choice<T>): T => {
+      console.log(`  ${GREEN}✓${RESET} ${choice.label}`);
+      return choice.value;
+    };
+
+    if (!answer) return confirmChoice(choices[defaultIndex]);
 
     const picked = Number(answer);
     if (Number.isInteger(picked) && picked >= 1 && picked <= choices.length) {
-      return choices[picked - 1].value;
+      return confirmChoice(choices[picked - 1]);
     }
     note(`  Enter a number from 1 to ${choices.length}.`);
   }
@@ -142,10 +149,16 @@ export async function askNumber(
 
   for (;;) {
     const answer = (await ask(`  > [${fallback}] `)).trim();
-    if (!answer) return fallback;
+    if (!answer) {
+      console.log(`  ${GREEN}✓${RESET} ${fallback}`);
+      return fallback;
+    }
 
     const value = Number(answer);
-    if (Number.isInteger(value) && value >= min && value <= max) return value;
+    if (Number.isInteger(value) && value >= min && value <= max) {
+      console.log(`  ${GREEN}✓${RESET} ${value}`);
+      return value;
+    }
     note(`  Enter a whole number from ${min} to ${max}.`);
   }
 }
