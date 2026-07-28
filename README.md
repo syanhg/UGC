@@ -71,9 +71,9 @@ Clips land in `./out` relative to where you ran the command.
 | `--dry-run` | | print the assembled prompt, send nothing |
 
 A clip takes minutes, almost all of it waiting on Google's queue, so `-j 4`
-runs a batch roughly four times faster. Past 5 you trade waiting for
-rate-limit errors. One failure doesn't stop the others, and the exit code is
-non-zero if any failed.
+runs a batch roughly four times faster. 
+
+Past 5 you trade waiting for rate-limit errors. 
 
 ## Avatars
 
