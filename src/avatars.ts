@@ -41,6 +41,15 @@ const AVATAR_DIR = 'refs';
 
 const NAME_PATTERN = /^[a-z0-9][a-z0-9_-]*$/i;
 
+/** Turns a Figma layer name into something the registry will accept. */
+export function slugifyName(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
 export function assertValidName(name: string): void {
   if (!NAME_PATTERN.test(name)) {
     throw new Error(

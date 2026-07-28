@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { relative } from 'node:path';
+import { basename, relative, resolve } from 'node:path';
 import {
   loadConfig,
   parseAspectRatio,
@@ -28,11 +28,19 @@ import {
 import { generateClip, buildPrompt, explainError } from './generate.ts';
 import {
   addAvatar,
+  assertValidName,
   getAvatar,
   loadAvatars,
   removeAvatar,
+  slugifyName,
   type Avatar,
 } from './avatars.ts';
+import {
+  downloadImage,
+  imageUrls,
+  parseFileKey,
+  readAvatars,
+} from './figma.ts';
 import { downloadClip, listGeneratedClips } from './files.ts';
 import { fromCwd, fromRoot } from './paths.ts';
 
@@ -50,6 +58,7 @@ USAGE
   ugc batch <file> [flags]        Generate one clip per non-empty line of <file>
   ugc avatar add <name> <photo...> [flags]   Register a fixed avatar
   ugc avatar list                 Show registered avatars
+  ugc avatar sync [--dry-run]     Pull avatars from the configured Figma file
   ugc avatar rm <name>            Remove an avatar and its copied photos
   ugc pull                        Collect clips that rendered but failed to download
   ugc models                      List Veo models with rough per-second rates
@@ -63,6 +72,7 @@ FLAGS
   --duration <n>     Clip length: 4, 6, or 8   (default: config, 8)
   --aspect <w:h>     9:16 or 16:9              (default: config, "9:16")
   --resolution <r>   720p or 1080p             (default: config)
+  --photo <n>        Which of the avatar's photos to use (1-based)
   --seed <n>         Fixed seed for reproducible output
   --notes <text>     Identity description, stored on the avatar (avatar add)
   --n <n>            Variations per prompt     (default: 1)
@@ -90,6 +100,8 @@ interface Args {
   resolution?: Resolution;
   seed?: number;
   notes?: string;
+  /** 1-based index into the avatar's photos. */
+  photo?: number;
   n: number;
   concurrency: number;
   noAudio: boolean;
@@ -161,6 +173,9 @@ function parseArgs(argv: string[]): Args {
         break;
       case '--seed':
         args.seed = Number(needsValue('--seed', argv[++i]));
+        break;
+      case '--photo':
+        args.photo = Number(needsValue('--photo', argv[++i]));
         break;
       case '--n':
         args.n = Number(needsValue('--n', argv[++i]));
@@ -255,6 +270,21 @@ async function runPrompts(prompts: string[], args: Args) {
   let config = await loadConfig();
   if (avatar) config = applyAvatar(config, avatar);
   config = applyOverrides(config, args);
+
+  // Picking a photo narrows the avatar to that one reference. In i2v only the
+  // first reference is used as the opening frame anyway, so without this the
+  // choice of which photo to open on would be silently made for you.
+  if (args.photo !== undefined) {
+    const chosen = config.refs[args.photo - 1];
+    if (!chosen) {
+      throw new Error(
+        `--photo ${args.photo} is out of range: ` +
+          `${args.avatar ?? 'this avatar'} has ${config.refs.length} photo` +
+          `${config.refs.length === 1 ? '' : 's'}`,
+      );
+    }
+    config = { ...config, refs: [chosen] };
+  }
 
   // An avatar's locked seed keeps repeat runs of the same prompt identical;
   // an explicit --seed still wins for one-off experiments.
@@ -392,6 +422,22 @@ async function runInteractive() {
     throw new Error('No avatars registered — run: ugc avatar add <name> <photo>');
   }
 
+  // Which photo opens the clip is the single biggest lever on how it looks in
+  // i2v, so ask rather than quietly taking the first.
+  const chosen = avatarName ? registry[avatarName] : undefined;
+  const photo =
+    chosen && chosen.refs.length > 1
+      ? await select(
+          'Which photo?',
+          chosen.refs.map((ref, index) => ({
+            value: index + 1,
+            label: basename(ref),
+            hint: `${ref}${index === 0 ? ' · default' : ''}`,
+          })),
+          0,
+        )
+      : undefined;
+
   const prompt = await askText('What happens in the clip?');
 
   const model = await select(
@@ -467,6 +513,7 @@ async function runInteractive() {
     positional: [],
     refs: [],
     avatar: avatarName,
+    photo,
     model,
     aspect: aspectRatio,
     duration,
@@ -514,6 +561,122 @@ async function runPull(args: Args) {
   }
 
   console.log(`\n${pulled} new clip${pulled === 1 ? '' : 's'} → ${config.outDir}/\n`);
+}
+
+/**
+ * Pulls avatars from a Figma file. Figma is the source of truth for photos;
+ * the local registry stays the runtime cache, so generation remains fast and
+ * works offline once a sync has happened.
+ */
+async function runAvatarSync(args: Args) {
+  const config = await loadConfig();
+  const source = args.figmaFile ?? config.figmaFile;
+
+  if (!source) {
+    throw new Error(
+      'No Figma file configured.\n' +
+        'Pass one:      ugc avatar sync --figma-file <url-or-key>\n' +
+        'Or set it:     "figmaFile" in ugc.config.json',
+    );
+  }
+
+  const fileKey = parseFileKey(source);
+  const { fileName, pageName, avatars } = await readAvatars(
+    fileKey,
+    config.figmaPage,
+  );
+
+  console.log(`\nFigma: ${fileName} · page "${pageName}"`);
+
+  if (!avatars.length) {
+    console.log(
+      '\nNo layers with images found on that page.\n' +
+        'Each avatar is one top-level layer; the layer name becomes the avatar name.\n',
+    );
+    return;
+  }
+
+  const existing = await loadAvatars();
+  const urls = await imageUrls(fileKey);
+  const scratch = fromRoot('.figma-sync');
+  await mkdir(scratch, { recursive: true });
+
+  let changed = 0;
+
+  try {
+    for (const found of avatars) {
+      const name = slugifyName(found.name);
+      const known = existing[name];
+
+      // Figma layer names allow anything; avatar names do not.
+      if (name !== found.name) {
+        note(`  layer "${found.name}" → avatar "${name}"`);
+      }
+
+      try {
+        assertValidName(name);
+      } catch {
+        console.log(`  ✗ ${found.name} — cannot become a valid avatar name`);
+        continue;
+      }
+
+      if (args.dryRun) {
+        console.log(
+          `  ${known ? '~' : '+'} ${name}  ${found.imageRefs.length} photo` +
+            `${found.imageRefs.length === 1 ? '' : 's'}` +
+            `${known ? '  (would replace)' : '  (new)'}`,
+        );
+        continue;
+      }
+
+      // Download to scratch first so a failure part-way cannot leave an
+      // avatar registered against photos that were never written.
+      const files: string[] = [];
+      for (const [index, ref] of found.imageRefs.entries()) {
+        const url = urls[ref];
+        if (!url) throw new Error(`no download URL for image ${ref}`);
+
+        const { data, ext } = await downloadImage(url);
+        const path = resolve(scratch, `${name}-${index}${ext}`);
+        await writeFile(path, data);
+        files.push(path);
+      }
+
+      const avatar = await addAvatar({
+        name,
+        sources: files,
+        force: true,
+        figma: {
+          fileKey,
+          nodeId: found.nodeId,
+          syncedAt: new Date().toISOString(),
+        },
+      });
+
+      changed++;
+      console.log(
+        `  ${known ? '✓' : '+'} ${name}  ${avatar.refs.length} photo` +
+          `${avatar.refs.length === 1 ? '' : 's'}  seed ${avatar.seed}` +
+          `${known ? '' : '  (new)'}`,
+      );
+    }
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+
+  // Local-only avatars are reported, never deleted — Figma is the source for
+  // what it knows about, not an authority to remove work it never had.
+  const fromFigma = new Set(avatars.map((a) => slugifyName(a.name)));
+  const localOnly = Object.keys(existing).filter((n) => !fromFigma.has(n));
+  if (localOnly.length) {
+    console.log(`\n  local-only, left untouched: ${localOnly.join(', ')}`);
+  }
+
+  console.log(
+    args.dryRun
+      ? '\nDry run — nothing downloaded or changed.\n'
+      : `\n${changed} avatar${changed === 1 ? '' : 's'} synced from Figma.\n`,
+  );
 }
 
 async function runAvatarCommand(args: Args) {
@@ -589,6 +752,10 @@ async function runAvatarCommand(args: Args) {
       console.log('');
       break;
     }
+
+    case 'sync':
+      await runAvatarSync(args);
+      break;
 
     case 'rm':
     case 'remove': {
