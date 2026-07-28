@@ -14,6 +14,12 @@ export const MEDIA_TYPES: Record<string, string> = {
   '.webp': 'image/webp',
 };
 
+/**
+ * Veo will not render recognisable people unless this is widened from its
+ * default. "allow_all" additionally permits minors — avatars here are adults.
+ */
+export type PersonGeneration = 'dont_allow' | 'allow_adult' | 'allow_all';
+
 export interface Config {
   model: string;
   mode: Mode;
@@ -22,6 +28,7 @@ export interface Config {
   aspectRatio: AspectRatio;
   resolution?: Resolution;
   generateAudio: boolean;
+  personGeneration: PersonGeneration;
   outDir: string;
   stylePrompt: string;
 }
@@ -41,12 +48,13 @@ export function parseResolution(value: string): Resolution {
 }
 
 const DEFAULTS: Config = {
-  model: 'google/veo-3.1-generate-001',
+  model: 'veo-3.1-generate-preview',
   mode: 'i2v',
   refs: [],
   duration: 8,
   aspectRatio: '9:16',
   generateAudio: true,
+  personGeneration: 'allow_adult',
   outDir: 'out',
   stylePrompt: '',
 };

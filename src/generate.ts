@@ -1,5 +1,5 @@
 import { experimental_generateVideo as generateVideo, NoVideoGeneratedError } from 'ai';
-import { gateway } from '@ai-sdk/gateway';
+import { google } from '@ai-sdk/google';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { resolve, extname, basename } from 'node:path';
@@ -84,7 +84,7 @@ export async function generateClip({
         : { prompt: fullPrompt };
 
   const { video, warnings } = await generateVideo({
-    model: gateway.video(config.model),
+    model: google.video(config.model),
     ...referenceArgs,
     duration: config.duration,
     aspectRatio: config.aspectRatio,
@@ -93,8 +93,14 @@ export async function generateClip({
     ...(seed !== undefined ? { seed } : {}),
     abortSignal: AbortSignal.timeout(10 * 60_000),
     providerOptions: {
-      // Video jobs are queued server-side; give them room to finish.
-      gateway: { pollTimeoutMs: 10 * 60_000 },
+      google: {
+        // Video jobs are queued server-side; give them room to finish.
+        pollTimeoutMs: 10 * 60_000,
+        // Veo refuses to render people unless this is set. "allow_adult" is
+        // the setting a UGC avatar needs; the wider "allow_all" also permits
+        // minors, which nothing here should ever be doing.
+        personGeneration: config.personGeneration,
+      },
     },
   });
 
@@ -130,8 +136,17 @@ export function explainError(err: unknown): string {
   if (/api key|unauthor|401|403/i.test(message)) {
     return (
       `Auth failed: ${message}\n\n` +
-      `Set your gateway key:\n  export AI_GATEWAY_API_KEY="..."\n` +
-      `Get one at https://vercel.com/dashboard → AI Gateway → API Keys`
+      `Set your Gemini API key:\n  export GOOGLE_GENERATIVE_AI_API_KEY="..."\n` +
+      `Get one at https://aistudio.google.com/apikey`
+    );
+  }
+
+  if (/billing|quota|429|resource_exhausted|free tier/i.test(message)) {
+    return (
+      `${message}\n\n` +
+      `Veo is not on the Gemini free tier. Enable billing on the Google Cloud ` +
+      `project behind your key, or try a cheaper model:\n` +
+      `  --model veo-3.1-lite-generate-preview`
     );
   }
 

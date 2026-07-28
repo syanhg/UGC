@@ -18,7 +18,7 @@ import {
   type Avatar,
 } from './avatars.ts';
 
-// Load .env so the gateway key doesn't have to be exported in every shell.
+// Load .env so the API key doesn't have to be exported in every shell.
 // Real environment variables still win over the file.
 const ENV_FILE = resolve(process.cwd(), '.env');
 if (existsSync(ENV_FILE)) process.loadEnvFile(ENV_FILE);
@@ -32,14 +32,14 @@ USAGE
   ugc avatar add <name> <photo...> [flags]   Register a fixed avatar
   ugc avatar list                 Show registered avatars
   ugc avatar rm <name>            Remove an avatar and its copied photos
-  ugc models                      List video models available on the gateway
+  ugc models                      List Veo models with rough per-second rates
   ugc help                        Show this
 
 FLAGS
   --avatar <name>    Generate as a registered avatar
   --ref <path>       Reference face image (repeatable). Overrides config "refs"
   --mode <m>         i2v | r2v | t2v          (default: config, "i2v")
-  --model <id>       Gateway model id          (default: config)
+  --model <id>       Veo model id              (default: config)
   --duration <n>     Clip length in seconds    (default: config, 8)
   --aspect <w:h>     Aspect ratio              (default: config, "9:16")
   --seed <n>         Fixed seed for reproducible output
@@ -289,18 +289,58 @@ async function runAvatarCommand(args: Args) {
   }
 }
 
+// Approximate list rates per output second at 720p, for sizing a run before you
+// make it. Google's pricing page is the authority, and which ids a key can
+// actually reach varies — hence the live listing below rather than this table.
+const MODEL_NOTES: Record<string, string> = {
+  'veo-3.1-generate-preview': 'best quality, native audio · ~$0.40/s',
+  'veo-3.1-fast-generate-preview': 'faster and cheaper · ~$0.10/s',
+};
+
+/**
+ * Asks the API which video models this key can actually reach. Listing is free,
+ * and the ids drift between preview and GA often enough that a hardcoded table
+ * goes stale and costs you a failed generation to discover.
+ */
 async function listModels() {
-  const res = await fetch('https://ai-gateway.vercel.sh/v1/models');
-  if (!res.ok) throw new Error(`Gateway returned ${res.status}`);
-
-  const { data } = (await res.json()) as { data: { id: string }[] };
-  const pattern = /veo|kling|wan|seedance|ray|sora|grok-imagine-video|video/i;
-
-  console.log('\nVideo models on the gateway:\n');
-  for (const { id } of data.filter((m) => pattern.test(m.id))) {
-    console.log(`  ${id}`);
+  const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+  if (!apiKey) {
+    throw new Error(
+      'GOOGLE_GENERATIVE_AI_API_KEY is not set — needed to list models.\n' +
+        'Get one at https://aistudio.google.com/apikey',
+    );
   }
-  console.log('\nUse one with --model, or set "model" in ugc.config.json\n');
+
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`,
+  );
+  if (!res.ok) {
+    throw new Error(`Model listing failed: ${res.status} ${res.statusText}`);
+  }
+
+  const { models } = (await res.json()) as { models: { name: string }[] };
+  const ids = models
+    .map((m) => m.name.replace(/^models\//, ''))
+    .filter((id) => /veo/i.test(id))
+    .sort();
+
+  if (!ids.length) {
+    console.log(
+      '\nNo Veo models available to this key.\n' +
+        'Veo needs billing enabled on the key\'s Google Cloud project.\n',
+    );
+    return;
+  }
+
+  const width = Math.max(...ids.map((id) => id.length));
+  console.log('\nVeo models available to your key:\n');
+  for (const id of ids) {
+    console.log(`  ${id.padEnd(width)}  ${MODEL_NOTES[id] ?? ''}`.trimEnd());
+  }
+  console.log(
+    '\nAn 8s clip costs roughly 8x the per-second rate.' +
+      '\nUse one with --model, or set "model" in ugc.config.json\n',
+  );
 }
 
 async function main() {

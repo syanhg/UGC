@@ -16,7 +16,7 @@
   },
   "license": "ISC",
   "dependencies": {
-    "@ai-sdk/gateway": "^4.0.28",
+    "@ai-sdk/google": "^4.0.25",
     "ai": "^7.0.37"
   },
   "devDependencies": {

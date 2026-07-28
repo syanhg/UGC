@@ -6,8 +6,22 @@ CLI for generating short, face-consistent UGC clips. Point it at a reference pho
 
 ```bash
 npm install
-export AI_GATEWAY_API_KEY="..."   # https://vercel.com/dashboard → AI Gateway → API Keys
+export GOOGLE_GENERATIVE_AI_API_KEY="..."   # https://aistudio.google.com/apikey
 ```
+
+Veo runs on the Gemini API and is **not on the free tier** — the Google Cloud
+project behind your key needs billing enabled. Rough cost for one 8-second clip:
+
+| Model | Per second (720p) | 8s clip |
+|---|---|---|
+| `veo-3.1-fast-generate-preview` | ~$0.10 | ~$0.80 |
+| `veo-3.1-generate-preview` | ~$0.40 | ~$3.20 |
+
+Iterate on prompts with `fast`, then re-run the keeper on the full model — the
+avatar's locked seed means you get the same clip, just rendered better.
+
+Run `ugc models` to see what your key can actually reach; the ids drift between
+preview and GA, and listing is free.
 
 No build step — Node 25 runs the TypeScript directly.
 
@@ -79,20 +93,21 @@ Practical tips:
 
 ## Models
 
-Default is `google/veo-3.1-generate-001` — native 8-second clips with synced audio, which is why the default duration is 8.
+Default is `veo-3.1-generate-preview` — native 8-second clips with synced audio,
+which is why the default duration is 8.
 
 ```bash
-node src/cli.ts models                          # list what's available
-node src/cli.ts gen "..." --model alibaba/wan-v2.7-r2v --mode r2v
+node src/cli.ts models                          # what your key can reach, with rates
+node src/cli.ts gen "..." --model veo-3.1-fast-generate-preview
 ```
 
-Worth knowing:
+Requests go straight to the Gemini API via `@ai-sdk/google`, so the model id is
+Google's own — `veo-3.1-generate-preview`, not a prefixed routing string.
 
-- `google/veo-3.1-fast-generate-001` — same family, faster and cheaper, good for iterating on prompts
-- `alibaba/wan-v2.7-r2v` — purpose-built for subject consistency; no native audio
-- `klingai/kling-v3.0-i2v` — strong motion realism
-
-Every model runs through the Vercel AI Gateway, so switching is a string change, not a rewrite.
+`personGeneration` in the config is worth knowing about: Veo refuses to render
+recognisable people unless it is widened from its default. It ships as
+`allow_adult`, which is what an adult UGC avatar needs. The wider `allow_all`
+also permits minors and this tool has no reason to use it.
 
 ## Config
 
@@ -100,21 +115,26 @@ Every model runs through the Vercel AI Gateway, so switching is a string change,
 
 ```json
 {
-  "model": "google/veo-3.1-generate-001",
+  "model": "veo-3.1-generate",
   "mode": "i2v",
-  "refs": ["refs/face.jpg"],
+  "refs": [],
   "duration": 8,
   "aspectRatio": "9:16",
   "resolution": "720x1280",
   "generateAudio": true,
+  "personGeneration": "allow_adult",
   "outDir": "out",
   "stylePrompt": "Selfie-style UGC video, handheld phone camera..."
 }
 ```
+
+`refs` here is only a fallback for running without `--avatar`. Registered
+avatars carry their own.
 
 ## Notes
 
 - Generation takes minutes, not seconds. The timeout is 10 minutes per clip.
 - Batch runs keep going if one clip fails; failures are reported at the end and the process exits non-zero.
 - `refs/`, `out/`, and `avatars.json` are gitignored — your avatars, source photos, and renders stay local.
-- Video models run safety filters. A refusal surfaces as `NoVideoGeneratedError`; usually a softer prompt or a different reference photo clears it.
+- Veo runs safety filters. A refusal surfaces as `NoVideoGeneratedError`; usually a softer prompt or a different reference photo clears it. Generating a real person's face from a photo is exactly what those filters watch for, so expect the occasional refusal on likeness grounds.
+- Publishing clips of an identifiable person delivering ad copy is a consent question, not a technical one. Get it in writing before anything ships.
