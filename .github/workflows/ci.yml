@@ -29,3 +29,11 @@ jobs:
       - run: npm run typecheck
 
       - run: npm test
+
+      # dist/ is committed so installs from git need no build tooling. A stale
+      # one means users get code that does not match src/.
+      - name: dist/ is up to date
+        run: |
+          npm run build
+          git diff --exit-code -- dist/ \
+            || { echo "::error::dist/ is stale. Run 'npm run build' and commit."; exit 1; }

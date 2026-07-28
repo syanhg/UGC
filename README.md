@@ -6,9 +6,12 @@ and identity description, which is what keeps the face from drifting between
 takes.
 
 ```bash
-ugc avatar add sofia ~/photos/sofia.jpg --notes "mid-20s, dark hair"
+ugc avatar add sofia ./sofia.png --notes "mid-20s, dark hair"
 ugc gen "holds up the serum bottle: 'three days. three.'" --avatar sofia
 ```
+
+Use an AI-generated face as your avatar rather than a real person's. See
+[Responsible use](#responsible-use).
 
 Video generation runs on Google Veo via the Gemini API. Avatars can be created
 from local photos, or pulled straight from a [Paper](https://paper.design)
@@ -88,37 +91,30 @@ An avatar stores the reference photos, a locked seed, and an optional `--notes`
 identity description that gets appended to the style prompt. Photos are copied
 rather than referenced, so moving the original later can't change your avatar.
 
-### Syncing from Paper (optional)
-
-`ugc avatar sync` sources avatars from [Paper](https://paper.design), so you can
-keep faces in a design file and pull them in instead of managing photos by hand.
-
-It talks to **Paper Desktop's built-in MCP server**, which runs on
-`http://127.0.0.1:29979/mcp` while a file is open. There is nothing to install
-or configure: open a file in Paper Desktop and run the command. Override the
-address with `PAPER_MCP_URL` if yours differs.
-
-```bash
-ugc avatar sync --dry-run   # show what would be pulled, download nothing
-ugc avatar sync
-```
-
-One top-level layer becomes one avatar, named after that layer. Every image in
-its subtree becomes one of that avatar's reference photos, so grouping several
-photos of one person into a frame gives that avatar several refs. Re-syncing
-replaces an avatar's photos while keeping its original seed. Local-only avatars
-are reported but never deleted.
-
-Every other part of `ugc` works without Paper. It is only a source for photos.
-
 Settings resolve in this order, each overriding the last:
 
 ```
 defaults -> ~/.ugc/config.json -> ./ugc.config.json -> avatar -> CLI flags
 ```
 
-`ugc where` prints where everything lives. Nothing is written next to the
-installed code, so the tool works the same from any directory.
+`ugc where` prints where everything lives.
+
+### Syncing from Paper (optional)
+
+`ugc avatar sync` pulls avatars from [Paper](https://paper.design) instead of
+managing photos by hand. It talks to **Paper Desktop's built-in MCP server** on
+`http://127.0.0.1:29979/mcp` while a file is open, so there is nothing to
+install or configure. Override the address with `PAPER_MCP_URL`.
+
+```bash
+ugc avatar sync --dry-run   # show what would be pulled, download nothing
+ugc avatar sync
+```
+
+One top-level layer becomes one avatar, named after that layer, and every image
+in its subtree becomes one of its reference photos. Re-syncing keeps the
+original seed. Local-only avatars are never deleted. Everything else in `ugc`
+works without Paper.
 
 ## Keeping the face consistent
 
@@ -129,52 +125,39 @@ installed code, so the tool works the same from any directory.
 | `t2v` | No reference at all | Broll, product shots, anything faceless |
 
 Reusing the same reference photos matters more than any other setting, which is
-what registering an avatar enforces. If clips drift in `r2v`, switch to `i2v`. A
-seed reproduces a *run*; it does not by itself hold a face steady across
-different prompts. The reference photos do that.
+what an avatar enforces. If clips drift in `r2v`, switch to `i2v`. A seed
+reproduces a *run*; the reference photos are what hold a face steady across
+different prompts.
 
 ## Responsible use
 
-This tool animates a photograph of a real person into a video of them speaking
-to camera. That is useful for making your own ads, and it is also how a
-convincing deepfake is made. Before you publish anything:
+**Use an AI-generated character, not a real person.** Generate a face with
+ChatGPT, Midjourney, or similar, and register that as your avatar. It sidesteps
+the consent and likeness problems entirely, and a synthetic face is usually
+cleaner and better lit than a real photo anyway.
 
-- **Get written consent from the person whose face you are using.** In most jurisdictions this is a legal question, not a courtesy.
-- **Never use a photo of a minor.** The tool refuses Veo's `allow_all` setting outright, and that is not a limitation to work around.
-- **Disclose synthetic media where required.** Most ad platforms now require AI-generated depictions of people to be labelled.
-- **Don't depict real people saying things they did not say**, especially anything that could read as news, endorsement, or testimony.
-
-Google applies its own safety filters on top of this. A refusal surfaces as
-`NoVideoGeneratedError`.
+If you do use a real person, get written consent, and never use a photo of a
+minor. Follow Google's
+[Generative AI Prohibited Use Policy](https://policies.google.com/terms/generative-ai/use-policy)
+and label synthetic media where your platform requires it.
 
 ## Security
 
-Your API key is stored at `~/.ugc/.env` mode `0600`, sent as a header rather
-than a URL parameter, and stripped from error messages before printing.
-
-The only remote service contacted is Google's Gemini API: no telemetry, no
-analytics, no intermediary. `ugc avatar sync` additionally talks to Paper's MCP
-server on localhost and fetches the image URLs it returns, restricted to
-`http` and `https`. Avatars live outside the repo so they can't be committed by
-accident.
-
-Details and reporting instructions are in [SECURITY.md](SECURITY.md).
+Your key is stored at `~/.ugc/.env` mode `0600`, sent as a header rather than a
+URL parameter, and stripped from error messages. The only remote service
+contacted is the Gemini API. See [SECURITY.md](SECURITY.md) to report an issue.
 
 ## Development
 
 ```bash
-npm run ugc -- gen "..." --dry-run   # runs straight from src/, no build
-npm run build
+npm run ugc -- gen "..." --dry-run   # runs from src/, no build
+npm run build                        # required before committing src/ changes
 npm run typecheck
 npm test
 ```
 
-Node runs the TypeScript in `src/` directly, but it refuses to strip types under
-`node_modules`, so the published `bin` points at compiled `dist/`. `npm install`
-builds it for you via the `prepare` hook.
-
-Tests cover path confinement, avatar-name validation, the `allow_all` refusal,
-and API-key redaction.
+Node runs the TypeScript in `src/` directly but refuses to strip types under
+`node_modules`, so `bin` points at compiled `dist/`, which is committed.
 
 ## License
 

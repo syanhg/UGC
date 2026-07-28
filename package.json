@@ -11,7 +11,7 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "node --test \"test/**/*.test.ts\"",
-    "prepare": "npm run build"
+    "prepack": "npm run build"
   },
   "keywords": [
     "veo",

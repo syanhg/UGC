@@ -1,6 +1,9 @@
 node_modules/
-dist/
 *.tgz
+
+# dist/ is committed on purpose: `npm install -g github:...` does not install
+# typescript, so there is nothing to build with at install time. Run
+# `npm run build` before committing source changes. CI checks it is current.
 
 # Secrets. Never commit these.
 .env
