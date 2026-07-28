@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { fromRoot } from './paths.ts';
 
 export type Mode = 'i2v' | 'r2v' | 't2v';
 export type AspectRatio = `${number}:${number}`;
@@ -69,7 +69,7 @@ const DEFAULTS: Config = {
   stylePrompt: '',
 };
 
-export const CONFIG_PATH = resolve(process.cwd(), 'ugc.config.json');
+export const CONFIG_PATH = fromRoot('ugc.config.json');
 
 export async function loadConfig(): Promise<Config> {
   if (!existsSync(CONFIG_PATH)) return { ...DEFAULTS };

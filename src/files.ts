@@ -1,6 +1,6 @@
 import { writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { fromRoot } from './paths.ts';
 
 const API = 'https://generativelanguage.googleapis.com/v1beta/files';
 
@@ -92,8 +92,8 @@ export async function downloadClip(
   file: RemoteFile,
   outDir: string,
 ): Promise<{ path: string; skipped: boolean }> {
-  await mkdir(resolve(process.cwd(), outDir), { recursive: true });
-  const path = resolve(process.cwd(), outDir, localNameFor(file));
+  await mkdir(fromRoot(outDir), { recursive: true });
+  const path = fromRoot(outDir, localNameFor(file));
 
   if (existsSync(path)) return { path, skipped: true };
 

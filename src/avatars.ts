@@ -1,7 +1,8 @@
 import { readFile, writeFile, mkdir, copyFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { resolve, extname, join } from 'node:path';
+import { extname, join } from 'node:path';
 import { MEDIA_TYPES, type Mode } from './config.ts';
+import { fromCwd, fromRoot } from './paths.ts';
 
 /**
  * A registered subject. The point of the registry is that everything which
@@ -23,7 +24,7 @@ export interface Avatar {
 
 type Registry = Record<string, Avatar>;
 
-export const AVATARS_PATH = resolve(process.cwd(), 'avatars.json');
+export const AVATARS_PATH = fromRoot('avatars.json');
 const AVATAR_DIR = 'refs';
 
 const NAME_PATTERN = /^[a-z0-9][a-z0-9_-]*$/i;
@@ -67,9 +68,7 @@ export async function getAvatar(name: string): Promise<Avatar> {
 
   // The registry stores paths, not image data, so a moved or deleted photo
   // only surfaces here — catch it before spending a generation call on it.
-  const missing = avatar.refs.filter(
-    (ref) => !existsSync(resolve(process.cwd(), ref)),
-  );
+  const missing = avatar.refs.filter((ref) => !existsSync(fromRoot(ref)));
   if (missing.length) {
     throw new Error(
       `Avatar "${name}" references files that no longer exist:\n  ${missing.join('\n  ')}\n` +
@@ -111,13 +110,15 @@ export async function addAvatar({
   }
 
   const dir = join(AVATAR_DIR, name);
-  await mkdir(resolve(process.cwd(), dir), { recursive: true });
+  await mkdir(fromRoot(dir), { recursive: true });
 
   // Photos are copied in rather than referenced in place, so moving or
   // deleting the original later cannot silently change the avatar.
   const refs: string[] = [];
   for (const [index, source] of sources.entries()) {
-    const abs = resolve(process.cwd(), source);
+    // Source photos are whatever the user typed at their shell, so these are
+    // the one thing here that resolves against the working directory.
+    const abs = fromCwd(source);
     if (!existsSync(abs)) throw new Error(`Photo not found: ${source}`);
 
     const ext = extname(abs).toLowerCase();
@@ -128,7 +129,7 @@ export async function addAvatar({
     }
 
     const dest = join(dir, `${String(index + 1).padStart(2, '0')}${ext}`);
-    await copyFile(abs, resolve(process.cwd(), dest));
+    await copyFile(abs, fromRoot(dest));
     refs.push(dest);
   }
 
@@ -155,7 +156,7 @@ export async function removeAvatar(name: string): Promise<Avatar> {
 
   delete registry[name];
   await saveAvatars(registry);
-  await rm(resolve(process.cwd(), AVATAR_DIR, name), {
+  await rm(fromRoot(AVATAR_DIR, name), {
     recursive: true,
     force: true,
   });

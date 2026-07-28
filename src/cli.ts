@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { relative, resolve } from 'node:path';
+import { relative } from 'node:path';
 import {
   loadConfig,
   parseAspectRatio,
@@ -18,10 +18,11 @@ import {
   type Avatar,
 } from './avatars.ts';
 import { downloadClip, listGeneratedClips } from './files.ts';
+import { fromCwd, fromRoot } from './paths.ts';
 
 // Load .env so the API key doesn't have to be exported in every shell.
 // Real environment variables still win over the file.
-const ENV_FILE = resolve(process.cwd(), '.env');
+const ENV_FILE = fromRoot('.env');
 if (existsSync(ENV_FILE)) process.loadEnvFile(ENV_FILE);
 
 const HELP = `
@@ -90,7 +91,9 @@ function parseArgs(argv: string[]): Args {
     const arg = argv[i];
     switch (arg) {
       case '--ref':
-        args.refs.push(needsValue('--ref', argv[++i]));
+        // Absolute here, so it survives being resolved against the project
+        // root later alongside avatar refs, which are project-relative.
+        args.refs.push(fromCwd(needsValue('--ref', argv[++i])));
         break;
       case '--avatar':
         args.avatar = needsValue('--avatar', argv[++i]);
@@ -396,7 +399,7 @@ async function main() {
       const file = args.positional[0];
       if (!file) throw new Error('batch needs a file: ugc batch shots.txt');
 
-      const lines = (await readFile(resolve(process.cwd(), file), 'utf8'))
+      const lines = (await readFile(fromCwd(file), 'utf8'))
         .split('\n')
         .map((line) => line.trim())
         .filter((line) => line && !line.startsWith('#'));

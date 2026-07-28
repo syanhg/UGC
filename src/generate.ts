@@ -2,7 +2,8 @@ import { experimental_generateVideo as generateVideo, NoVideoGeneratedError } fr
 import { google } from '@ai-sdk/google';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { resolve, extname, basename } from 'node:path';
+import { extname, basename } from 'node:path';
+import { fromRoot } from './paths.ts';
 import { MEDIA_TYPES, type Config } from './config.ts';
 import { fetchWithRetry } from './files.ts';
 
@@ -13,7 +14,8 @@ import { fetchWithRetry } from './files.ts';
 async function loadRef(path: string): Promise<string> {
   if (/^https?:\/\//.test(path)) return path;
 
-  const abs = resolve(process.cwd(), path);
+  // Avatar refs are stored project-relative; --ref is made absolute by the CLI.
+  const abs = fromRoot(path);
   if (!existsSync(abs)) {
     throw new Error(
       `Reference image not found: ${path}\n` +
@@ -134,11 +136,11 @@ export async function generateClip({
     },
   });
 
-  await mkdir(resolve(process.cwd(), config.outDir), { recursive: true });
+  await mkdir(fromRoot(config.outDir), { recursive: true });
 
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const name = `${stamp}_${slugify(label ?? prompt)}.mp4`;
-  const file = resolve(process.cwd(), config.outDir, name);
+  const file = fromRoot(config.outDir, name);
 
   await writeFile(file, video.uint8Array);
 
