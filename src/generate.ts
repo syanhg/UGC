@@ -4,6 +4,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { resolve, extname, basename } from 'node:path';
 import { MEDIA_TYPES, type Config } from './config.ts';
+import { fetchWithRetry } from './files.ts';
 
 /**
  * Reference images become data URLs so the same local face file can be reused
@@ -36,6 +37,34 @@ function slugify(text: string): string {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '')
     .slice(0, 48) || 'clip';
+}
+
+/**
+ * Veo uploads the finished clip to the Files API and hands back a URL for the
+ * SDK to fetch. That fetch 503s often enough to matter, and by then the clip is
+ * already rendered and billed — so retry rather than lose it. Files stay
+ * retrievable for 48 hours, so a total failure here is recoverable by hand.
+ */
+async function downloadWithRetry({
+  url,
+  abortSignal,
+}: {
+  url: URL;
+  abortSignal?: AbortSignal;
+}): Promise<{ data: Uint8Array; mediaType: string | undefined }> {
+  try {
+    const res = await fetchWithRetry(url.toString(), { signal: abortSignal });
+    return {
+      data: new Uint8Array(await res.arrayBuffer()),
+      mediaType: res.headers.get('content-type') ?? undefined,
+    };
+  } catch (err) {
+    throw new Error(
+      `The clip rendered but could not be downloaded: ` +
+        `${err instanceof Error ? err.message : String(err)}\n` +
+        `It stays on Google's Files API for 48 hours — recover it with "ugc pull".`,
+    );
+  }
 }
 
 export interface GenerateOptions {
@@ -92,6 +121,7 @@ export async function generateClip({
     generateAudio: config.generateAudio,
     ...(seed !== undefined ? { seed } : {}),
     abortSignal: AbortSignal.timeout(10 * 60_000),
+    download: downloadWithRetry,
     providerOptions: {
       google: {
         // Video jobs are queued server-side; give them room to finish.
@@ -122,6 +152,15 @@ export async function generateClip({
   };
 }
 
+/**
+ * The Files API takes its key as a query parameter, so a failed download quotes
+ * the key back inside the error message — and from there into logs and scroll
+ * buffers. Strip it before anything is printed.
+ */
+function redact(message: string): string {
+  return message.replace(/([?&]key=)[^&\s]+/g, '$1<redacted>');
+}
+
 export function explainError(err: unknown): string {
   if (NoVideoGeneratedError.isInstance(err)) {
     return (
@@ -131,7 +170,7 @@ export function explainError(err: unknown): string {
     );
   }
 
-  const message = err instanceof Error ? err.message : String(err);
+  const message = redact(err instanceof Error ? err.message : String(err));
 
   if (/api key|unauthor|401|403/i.test(message)) {
     return (
@@ -146,7 +185,7 @@ export function explainError(err: unknown): string {
       `${message}\n\n` +
       `Veo is not on the Gemini free tier. Enable billing on the Google Cloud ` +
       `project behind your key, or try a cheaper model:\n` +
-      `  --model veo-3.1-lite-generate-preview`
+      `  --model veo-3.1-fast-generate-preview`
     );
   }
 

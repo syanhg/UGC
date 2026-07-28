@@ -17,6 +17,7 @@ import {
   removeAvatar,
   type Avatar,
 } from './avatars.ts';
+import { downloadClip, listGeneratedClips } from './files.ts';
 
 // Load .env so the API key doesn't have to be exported in every shell.
 // Real environment variables still win over the file.
@@ -32,6 +33,7 @@ USAGE
   ugc avatar add <name> <photo...> [flags]   Register a fixed avatar
   ugc avatar list                 Show registered avatars
   ugc avatar rm <name>            Remove an avatar and its copied photos
+  ugc pull                        Collect clips that rendered but failed to download
   ugc models                      List Veo models with rough per-second rates
   ugc help                        Show this
 
@@ -218,6 +220,42 @@ async function runPrompts(prompts: string[], args: Args) {
   if (failed) process.exitCode = 1;
 }
 
+/**
+ * Collects clips that rendered but never made it to disk. Google keeps them for
+ * 48 hours, so a download that failed after billing is recoverable rather than
+ * lost.
+ */
+async function runPull(args: Args) {
+  const config = applyOverrides(await loadConfig(), args);
+  const clips = await listGeneratedClips();
+
+  if (!clips.length) {
+    console.log('\nNo clips waiting on the Files API.\n');
+    return;
+  }
+
+  console.log(`\n${clips.length} clip${clips.length === 1 ? '' : 's'} on the Files API:\n`);
+
+  let pulled = 0;
+  for (const clip of clips) {
+    const expires = new Date(clip.expirationTime).toLocaleString();
+    try {
+      const { path, skipped } = await downloadClip(clip, config.outDir);
+      const label = relative(process.cwd(), path);
+      if (skipped) {
+        console.log(`  · ${label} (already local)`);
+      } else {
+        pulled++;
+        console.log(`  ✓ ${label}  · expires ${expires}`);
+      }
+    } catch (err) {
+      console.log(`  ✗ ${clip.name} — ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  console.log(`\n${pulled} new clip${pulled === 1 ? '' : 's'} → ${config.outDir}/\n`);
+}
+
 async function runAvatarCommand(args: Args) {
   const [action, ...rest] = args.positional;
 
@@ -371,6 +409,10 @@ async function main() {
     case 'avatar':
     case 'avatars':
       await runAvatarCommand(args);
+      break;
+
+    case 'pull':
+      await runPull(args);
       break;
 
     case 'models':

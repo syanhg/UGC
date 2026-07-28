@@ -40,11 +40,21 @@ export function parseAspectRatio(value: string): AspectRatio {
   return value as AspectRatio;
 }
 
+/**
+ * To Veo, resolution is a quality tier — 720p, 1080p — and orientation comes
+ * from the aspect ratio instead. The provider recognises only the landscape
+ * spelling of each tier ("1280x720"), so a vertical clip is still "1280x720"
+ * plus a 9:16 aspect. Writing "720x1280" for a vertical video is the natural
+ * mistake, so normalise to the long edge first rather than rejecting it.
+ */
 export function parseResolution(value: string): Resolution {
-  if (!/^\d+x\d+$/.test(value)) {
-    throw new Error(`Resolution must look like "720x1280" (got "${value}")`);
+  const match = /^(\d+)x(\d+)$/.exec(value);
+  if (!match) {
+    throw new Error(`Resolution must look like "1280x720" (got "${value}")`);
   }
-  return value as Resolution;
+
+  const [width, height] = [Number(match[1]), Number(match[2])];
+  return `${Math.max(width, height)}x${Math.min(width, height)}`;
 }
 
 const DEFAULTS: Config = {
