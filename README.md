@@ -96,10 +96,6 @@ ugc avatar sync                    # pull avatars from Paper (see below)
 ugc avatar rm <name>
 ```
 
-An avatar stores the reference photos, a locked seed, and an optional `--notes`
-identity description that gets appended to the style prompt. Photos are copied
-rather than referenced, so moving the original later can't change your avatar.
-
 Settings resolve in this order, each overriding the last:
 
 ```
@@ -113,7 +109,8 @@ defaults -> ~/.ugc/config.json -> ./ugc.config.json -> avatar -> CLI flags
 `ugc avatar sync` pulls avatars from [Paper](https://paper.design) instead of
 managing photos by hand. It talks to **Paper Desktop's built-in MCP server** on
 `http://127.0.0.1:29979/mcp` while a file is open, so there is nothing to
-install or configure. Override the address with `PAPER_MCP_URL`.
+install or configure. The sync is one-way and read-only: it never writes back
+to your design file. Override the address with `PAPER_MCP_URL`.
 
 ```bash
 ugc avatar sync --dry-run   # show what would be pulled, download nothing
