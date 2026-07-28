@@ -41,12 +41,7 @@ import {
   slugifyName,
   type Avatar,
 } from './avatars.ts';
-import {
-  downloadImage,
-  imageUrls,
-  parseFileKey,
-  readAvatars,
-} from './figma.ts';
+import { downloadPhoto, readAvatars } from './paper.ts';
 import { downloadClip, listGeneratedClips } from './files.ts';
 import { fromCwd, fromRoot } from './paths.ts';
 
@@ -64,7 +59,7 @@ USAGE
   ugc batch <file> [flags]        Generate one clip per non-empty line of <file>
   ugc avatar add <name> <photo...> [flags]   Register a fixed avatar
   ugc avatar list                 Show registered avatars
-  ugc avatar sync [--dry-run]     Pull avatars from the configured Figma file
+  ugc avatar sync [--dry-run]     Pull avatars from the open Paper file
   ugc avatar rm <name>            Remove an avatar and its copied photos
   ugc pull                        Collect clips that rendered but failed to download
   ugc models                      List Veo models with rough per-second rates
@@ -113,8 +108,6 @@ interface Args {
   noAudio: boolean;
   dryRun: boolean;
   force: boolean;
-  figmaFile?: string;
-  figmaNode?: string;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -198,12 +191,6 @@ function parseArgs(argv: string[]): Args {
         break;
       case '--force':
         args.force = true;
-        break;
-      case '--figma-file':
-        args.figmaFile = needsValue('--figma-file', argv[++i]);
-        break;
-      case '--figma-node':
-        args.figmaNode = needsValue('--figma-node', argv[++i]);
         break;
       default:
         if (arg.startsWith('--')) throw new Error(`Unknown flag: ${arg}`);
@@ -431,21 +418,21 @@ async function runInteractive() {
 
   console.log('\n\x1b[1mugc\x1b[0m — face-consistent UGC clips');
 
-  // Figma-backed avatars sort first: when a Figma file is the source of truth,
-  // the section you just edited there is the one you are most likely to want.
+  // Synced avatars sort first: when Paper is the source of truth, the layer
+  // you just edited there is the one you are most likely to want.
   const ordered = [...avatars].sort(
-    (a, b) => Number(Boolean(b.figma)) - Number(Boolean(a.figma)),
+    (a, b) => Number(Boolean(b.source)) - Number(Boolean(a.source)),
   );
 
   const avatarName = await select<string | undefined>(
-    'Avatar — one Figma section is one character',
+    'Avatar — one Paper layer is one character',
     [
       ...ordered.map((a) => ({
         value: a.name as string | undefined,
         label: a.name,
         hint:
           `${a.refs.length} photo${a.refs.length === 1 ? '' : 's'} · seed ${a.seed}` +
-          `${a.figma ? ' · figma' : ' · local'}`,
+          `${a.source ? ` · ${a.source.kind}` : ' · local'}`,
       })),
       {
         value: undefined,
@@ -613,41 +600,26 @@ async function runPull(args: Args) {
 }
 
 /**
- * Pulls avatars from a Figma file. Figma is the source of truth for photos;
- * the local registry stays the runtime cache, so generation remains fast and
- * works offline once a sync has happened.
+ * Pulls avatars from the open Paper file. Paper is the source of truth for
+ * photos; the local registry stays the runtime cache, so generation remains
+ * fast and works offline once a sync has happened.
  */
 async function runAvatarSync(args: Args) {
-  const config = await loadConfig();
-  const source = args.figmaFile ?? config.figmaFile;
+  const { fileName, pageName, avatars } = await readAvatars();
 
-  if (!source) {
-    throw new Error(
-      'No Figma file configured.\n' +
-        'Pass one:      ugc avatar sync --figma-file <url-or-key>\n' +
-        'Or set it:     "figmaFile" in ugc.config.json',
-    );
-  }
-
-  const fileKey = parseFileKey(source);
-  const { fileName, pageName, avatars } = await readAvatars(
-    fileKey,
-    config.figmaPage,
-  );
-
-  console.log(`\nFigma: ${fileName} · page "${pageName}"`);
+  console.log(`\nPaper: ${fileName} · page "${pageName}"`);
 
   if (!avatars.length) {
     console.log(
       '\nNo layers with images found on that page.\n' +
-        'Each avatar is one top-level layer; the layer name becomes the avatar name.\n',
+        'Each avatar is one top-level layer; the layer name becomes the avatar name.\n' +
+        'Group several photos of one person into a frame to give that avatar several refs.\n',
     );
     return;
   }
 
   const existing = await loadAvatars();
-  const urls = await imageUrls(fileKey);
-  const scratch = fromRoot('.figma-sync');
+  const scratch = fromRoot('.paper-sync');
   await mkdir(scratch, { recursive: true });
 
   let changed = 0;
@@ -657,7 +629,7 @@ async function runAvatarSync(args: Args) {
       const name = slugifyName(found.name);
       const known = existing[name];
 
-      // Figma layer names allow anything; avatar names do not.
+      // Paper layer names allow anything; avatar names do not.
       if (name !== found.name) {
         note(`  layer "${found.name}" → avatar "${name}"`);
       }
@@ -683,10 +655,7 @@ async function runAvatarSync(args: Args) {
       // avatar registered against photos that were never written.
       const files: string[] = [];
       for (const [index, photo] of found.photos.entries()) {
-        const url = urls[photo.imageRef];
-        if (!url) throw new Error(`no download URL for image ${photo.imageRef}`);
-
-        const { data, ext } = await downloadImage(url);
+        const { data, ext } = await downloadPhoto(photo);
         const path = resolve(scratch, `${name}-${index}${ext}`);
         await writeFile(path, data);
         files.push(path);
@@ -697,8 +666,9 @@ async function runAvatarSync(args: Args) {
         sources: files,
         labels: found.photos.map((p) => p.label),
         force: true,
-        figma: {
-          fileKey,
+        source: {
+          kind: 'paper',
+          fileName,
           nodeId: found.nodeId,
           syncedAt: new Date().toISOString(),
         },
@@ -715,10 +685,10 @@ async function runAvatarSync(args: Args) {
     await rm(scratch, { recursive: true, force: true });
   }
 
-  // Local-only avatars are reported, never deleted — Figma is the source for
+  // Local-only avatars are reported, never deleted — Paper is the source for
   // what it knows about, not an authority to remove work it never had.
-  const fromFigma = new Set(avatars.map((a) => slugifyName(a.name)));
-  const localOnly = Object.keys(existing).filter((n) => !fromFigma.has(n));
+  const fromPaper = new Set(avatars.map((a) => slugifyName(a.name)));
+  const localOnly = Object.keys(existing).filter((n) => !fromPaper.has(n));
   if (localOnly.length) {
     console.log(`\n  local-only, left untouched: ${localOnly.join(', ')}`);
   }
@@ -726,7 +696,7 @@ async function runAvatarSync(args: Args) {
   console.log(
     args.dryRun
       ? '\nDry run — nothing downloaded or changed.\n'
-      : `\n${changed} avatar${changed === 1 ? '' : 's'} synced from Figma.\n`,
+      : `\n${changed} avatar${changed === 1 ? '' : 's'} synced from Paper.\n`,
   );
 }
 
@@ -740,10 +710,6 @@ async function runAvatarCommand(args: Args) {
         throw new Error('ugc avatar add <name> <photo.jpg> [more.jpg ...]');
       }
 
-      if ((args.figmaFile === undefined) !== (args.figmaNode === undefined)) {
-        throw new Error('--figma-file and --figma-node must be given together');
-      }
-
       const avatar = await addAvatar({
         name,
         sources,
@@ -752,15 +718,6 @@ async function runAvatarCommand(args: Args) {
         model: args.model,
         notes: args.notes,
         force: args.force,
-        ...(args.figmaFile && args.figmaNode
-          ? {
-              figma: {
-                fileKey: args.figmaFile,
-                nodeId: args.figmaNode,
-                syncedAt: new Date().toISOString(),
-              },
-            }
-          : {}),
       });
 
       console.log(
@@ -793,10 +750,10 @@ async function runAvatarCommand(args: Args) {
             `${avatar.model ? `  ${avatar.model}` : ''}`,
         );
         if (avatar.notes) console.log(`  ${' '.repeat(width)}  ${avatar.notes}`);
-        if (avatar.figma) {
+        if (avatar.source) {
           console.log(
-            `  ${' '.repeat(width)}  figma ${avatar.figma.fileKey}#${avatar.figma.nodeId}` +
-              ` · synced ${avatar.figma.syncedAt.slice(0, 10)}`,
+            `  ${' '.repeat(width)}  ${avatar.source.kind}: ${avatar.source.fileName}` +
+              ` · synced ${avatar.source.syncedAt.slice(0, 10)}`,
           );
         }
       }

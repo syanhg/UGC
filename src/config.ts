@@ -31,10 +31,6 @@ export interface Config {
   personGeneration: PersonGeneration;
   outDir: string;
   stylePrompt: string;
-  /** Figma file holding the avatar photos — URL or bare key. */
-  figmaFile?: string;
-  /** Page within that file. Defaults to the first page. */
-  figmaPage?: string;
 }
 
 /**

@@ -10,12 +10,13 @@ import { fromCwd, fromRoot } from './paths.ts';
  * captured once at `add` time and replayed identically on every clip after.
  */
 /**
- * Where an avatar's photos came from, when they came from Figma. Recorded so a
- * re-sync targets the same node rather than relying on names matching, and so
- * `avatar list` can show what is local-only versus Figma-backed.
+ * Where an avatar's photos came from, when they came from a design tool.
+ * Recorded so a re-sync targets the same node rather than relying on names
+ * matching, and so `avatar list` can show what is local-only versus synced.
  */
-export interface FigmaSource {
-  fileKey: string;
+export interface AvatarSource {
+  kind: 'paper' | 'figma';
+  fileName: string;
   nodeId: string;
   syncedAt: string;
 }
@@ -36,7 +37,7 @@ export interface Avatar {
   model?: string;
   /** Identity description appended to the global style prompt. */
   notes?: string;
-  figma?: FigmaSource;
+  source?: AvatarSource;
   createdAt: string;
 }
 
@@ -121,7 +122,7 @@ export interface AddAvatarOptions {
   mode?: Mode;
   model?: string;
   notes?: string;
-  figma?: FigmaSource;
+  source?: AvatarSource;
   /** Replace an existing avatar rather than refusing. Needed to re-sync. */
   force?: boolean;
 }
@@ -134,7 +135,7 @@ export async function addAvatar({
   mode,
   model,
   notes,
-  figma,
+  source,
   force = false,
 }: AddAvatarOptions): Promise<Avatar> {
   assertValidName(name);
@@ -191,7 +192,7 @@ export async function addAvatar({
     ...(mode ?? existing?.mode ? { mode: mode ?? existing?.mode } : {}),
     ...(model ?? existing?.model ? { model: model ?? existing?.model } : {}),
     ...(notes ?? existing?.notes ? { notes: notes ?? existing?.notes } : {}),
-    ...(figma ? { figma } : existing?.figma ? { figma: existing.figma } : {}),
+    ...(source ?? existing?.source ? { source: source ?? existing?.source } : {}),
     createdAt: existing?.createdAt ?? new Date().toISOString(),
   };
 

@@ -6,3 +6,4 @@ refs/
 avatars.json
 !refs/.gitkeep
 .ugc-pulled.json
+.paper-sync/

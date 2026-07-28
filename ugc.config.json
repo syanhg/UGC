@@ -7,7 +7,6 @@
   "resolution": "720x1280",
   "generateAudio": true,
   "personGeneration": "allow_adult",
-  "figmaFile": "BpqtCvPXxvrKwgZw0pAbPl",
   "outDir": "out",
   "stylePrompt": "Selfie-style UGC video, handheld phone camera, natural indoor lighting, authentic and unpolished, subject looks directly into the lens and speaks to camera. Keep the subject's face, hair, and identity exactly consistent with the reference image."
 }
