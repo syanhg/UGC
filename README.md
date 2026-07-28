@@ -1,9 +1,7 @@
 # ugc
 
 CLI for generating short, face-consistent UGC clips. Point it at a reference
-photo, give it a line of dialogue or action, get an 8-second vertical video.
-
-Register a subject once, and every clip after it reuses the same photos, seed,
+photo, give it a line of dialogue or action, get an 8-second vertical video. Register a subject once, and every clip after it reuses the same photos, seed,
 and identity description, which is what keeps the face from drifting between
 takes.
 
