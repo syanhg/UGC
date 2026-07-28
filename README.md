@@ -144,7 +144,7 @@ amount of good intent changes what the output is or who it can hurt. A
 synthetic face costs you nothing, carries no consent or likeness problem, and
 is usually cleaner and better lit anyway.
 
-Follow Google's
+Please Please Follow Google's
 [Generative AI Prohibited Use Policy](https://policies.google.com/terms/generative-ai/use-policy)
 and label synthetic media where your platform requires it.
 
