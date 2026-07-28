@@ -36,8 +36,6 @@ billing enabled.
 | `veo-3.1-fast-generate-preview` | ~$0.10 | ~$0.80 |
 | `veo-3.1-generate-preview` | ~$0.40 | ~$3.20 |
 
-Iterate with `fast`, then re-run the keeper on the full model. The avatar's
-locked seed means you get the same clip, just rendered better.
 
 ## Use
 
