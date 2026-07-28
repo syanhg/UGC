@@ -9,6 +9,17 @@ import { fromCwd, fromRoot } from './paths.ts';
  * affects likeness — the photos, the seed, the identity description — is
  * captured once at `add` time and replayed identically on every clip after.
  */
+/**
+ * Where an avatar's photos came from, when they came from Figma. Recorded so a
+ * re-sync targets the same node rather than relying on names matching, and so
+ * `avatar list` can show what is local-only versus Figma-backed.
+ */
+export interface FigmaSource {
+  fileKey: string;
+  nodeId: string;
+  syncedAt: string;
+}
+
 export interface Avatar {
   name: string;
   /** Project-relative paths to the copies under refs/<name>/. */
@@ -19,6 +30,7 @@ export interface Avatar {
   model?: string;
   /** Identity description appended to the global style prompt. */
   notes?: string;
+  figma?: FigmaSource;
   createdAt: string;
 }
 
@@ -86,6 +98,9 @@ export interface AddAvatarOptions {
   mode?: Mode;
   model?: string;
   notes?: string;
+  figma?: FigmaSource;
+  /** Replace an existing avatar rather than refusing. Needed to re-sync. */
+  force?: boolean;
 }
 
 export async function addAvatar({
@@ -95,6 +110,8 @@ export async function addAvatar({
   mode,
   model,
   notes,
+  figma,
+  force = false,
 }: AddAvatarOptions): Promise<Avatar> {
   assertValidName(name);
 
@@ -103,13 +120,20 @@ export async function addAvatar({
   }
 
   const registry = await loadAvatars();
-  if (registry[name]) {
+  const existing = registry[name];
+
+  if (existing && !force) {
     throw new Error(
-      `Avatar "${name}" already exists. Remove it first:  ugc avatar rm ${name}`,
+      `Avatar "${name}" already exists. Replace it with --force, ` +
+        `or remove it first:  ugc avatar rm ${name}`,
     );
   }
 
   const dir = join(AVATAR_DIR, name);
+
+  // Clear old photos so a replacement that ships fewer images does not leave
+  // the extras behind and silently keep referencing them.
+  if (existing) await rm(fromRoot(dir), { recursive: true, force: true });
   await mkdir(fromRoot(dir), { recursive: true });
 
   // Photos are copied in rather than referenced in place, so moving or
@@ -136,11 +160,14 @@ export async function addAvatar({
   const avatar: Avatar = {
     name,
     refs,
-    seed: seed ?? Math.floor(Math.random() * 1_000_000),
-    ...(mode ? { mode } : {}),
-    ...(model ? { model } : {}),
-    ...(notes ? { notes } : {}),
-    createdAt: new Date().toISOString(),
+    // A re-synced avatar keeps its original seed, so clips generated before
+    // and after a photo update stay comparable.
+    seed: seed ?? existing?.seed ?? Math.floor(Math.random() * 1_000_000),
+    ...(mode ?? existing?.mode ? { mode: mode ?? existing?.mode } : {}),
+    ...(model ?? existing?.model ? { model: model ?? existing?.model } : {}),
+    ...(notes ?? existing?.notes ? { notes: notes ?? existing?.notes } : {}),
+    ...(figma ? { figma } : existing?.figma ? { figma: existing.figma } : {}),
+    createdAt: existing?.createdAt ?? new Date().toISOString(),
   };
 
   registry[name] = avatar;

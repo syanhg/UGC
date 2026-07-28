@@ -94,6 +94,9 @@ interface Args {
   concurrency: number;
   noAudio: boolean;
   dryRun: boolean;
+  force: boolean;
+  figmaFile?: string;
+  figmaNode?: string;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -106,6 +109,7 @@ function parseArgs(argv: string[]): Args {
     concurrency: 1,
     noAudio: false,
     dryRun: false,
+    force: false,
   };
 
   const needsValue = (flag: string, value: string | undefined): string => {
@@ -170,6 +174,15 @@ function parseArgs(argv: string[]): Args {
       case '--concurrency':
       case '-j':
         args.concurrency = Number(needsValue('--concurrency', argv[++i]));
+        break;
+      case '--force':
+        args.force = true;
+        break;
+      case '--figma-file':
+        args.figmaFile = needsValue('--figma-file', argv[++i]);
+        break;
+      case '--figma-node':
+        args.figmaNode = needsValue('--figma-node', argv[++i]);
         break;
       default:
         if (arg.startsWith('--')) throw new Error(`Unknown flag: ${arg}`);
@@ -461,6 +474,7 @@ async function runInteractive() {
     concurrency,
     noAudio: false,
     dryRun: false,
+    force: false,
     ...(avatarName ? {} : { mode: 't2v' as const }),
     resolution,
   });
@@ -512,6 +526,10 @@ async function runAvatarCommand(args: Args) {
         throw new Error('ugc avatar add <name> <photo.jpg> [more.jpg ...]');
       }
 
+      if ((args.figmaFile === undefined) !== (args.figmaNode === undefined)) {
+        throw new Error('--figma-file and --figma-node must be given together');
+      }
+
       const avatar = await addAvatar({
         name,
         sources,
@@ -519,6 +537,16 @@ async function runAvatarCommand(args: Args) {
         mode: args.mode,
         model: args.model,
         notes: args.notes,
+        force: args.force,
+        ...(args.figmaFile && args.figmaNode
+          ? {
+              figma: {
+                fileKey: args.figmaFile,
+                nodeId: args.figmaNode,
+                syncedAt: new Date().toISOString(),
+              },
+            }
+          : {}),
       });
 
       console.log(
@@ -551,6 +579,12 @@ async function runAvatarCommand(args: Args) {
             `${avatar.model ? `  ${avatar.model}` : ''}`,
         );
         if (avatar.notes) console.log(`  ${' '.repeat(width)}  ${avatar.notes}`);
+        if (avatar.figma) {
+          console.log(
+            `  ${' '.repeat(width)}  figma ${avatar.figma.fileKey}#${avatar.figma.nodeId}` +
+              ` · synced ${avatar.figma.syncedAt.slice(0, 10)}`,
+          );
+        }
       }
       console.log('');
       break;
