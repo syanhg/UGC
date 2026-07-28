@@ -9,7 +9,7 @@ import {
   type Config,
   type Mode,
 } from './config.ts';
-import { generateClip, explainError } from './generate.ts';
+import { generateClip, buildPrompt, explainError } from './generate.ts';
 import {
   addAvatar,
   getAvatar,
@@ -49,6 +49,7 @@ FLAGS
   --notes <text>     Identity description, stored on the avatar (avatar add)
   --n <n>            Variations per prompt     (default: 1)
   --no-audio         Disable generated audio
+  --dry-run          Show the assembled prompt and settings; generate nothing
 
 EXAMPLES
   ugc avatar add sofia ~/photos/sofia-1.jpg ~/photos/sofia-2.jpg \\
@@ -71,6 +72,7 @@ interface Args {
   notes?: string;
   n: number;
   noAudio: boolean;
+  dryRun: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -80,6 +82,7 @@ function parseArgs(argv: string[]): Args {
     refs: [],
     n: 1,
     noAudio: false,
+    dryRun: false,
   };
 
   const needsValue = (flag: string, value: string | undefined): string => {
@@ -126,6 +129,9 @@ function parseArgs(argv: string[]): Args {
         break;
       case '--no-audio':
         args.noAudio = true;
+        break;
+      case '--dry-run':
+        args.dryRun = true;
         break;
       default:
         if (arg.startsWith('--')) throw new Error(`Unknown flag: ${arg}`);
@@ -183,6 +189,29 @@ async function runPrompts(prompts: string[], args: Args) {
       `${avatar ? ` · avatar: ${avatar.name}` : ''}` +
       `${config.mode !== 't2v' && config.refs.length ? ` · ref: ${config.refs.join(', ')}` : ''}`,
   );
+
+  if (args.dryRun) {
+    for (const [index, prompt] of prompts.entries()) {
+      console.log(`\n─── clip ${index + 1}/${prompts.length} ${'─'.repeat(40)}`);
+      console.log(`\nPROMPT SENT TO VEO:\n\n${buildPrompt(prompt, config)}\n`);
+      console.log(
+        `FIRST FRAME: ${
+          config.mode === 'i2v'
+            ? config.refs[0]
+            : config.mode === 'r2v'
+              ? `(composed by the model; ${config.refs.length} identity reference${config.refs.length === 1 ? '' : 's'})`
+              : '(none — text only)'
+        }`,
+      );
+      console.log(
+        `SEED: ${baseSeed ?? '(random each run)'}` +
+          `   AUDIO: ${config.generateAudio ? 'on' : 'off'}` +
+          `   PEOPLE: ${config.personGeneration}`,
+      );
+    }
+    console.log(`\nDry run — nothing sent, nothing charged.\n`);
+    return;
+  }
   console.log(`Generating ${total} clip${total === 1 ? '' : 's'}...\n`);
 
   let done = 0;

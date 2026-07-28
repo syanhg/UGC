@@ -81,15 +81,23 @@ export interface GenerateResult {
   warnings: string[];
 }
 
+/**
+ * The text Veo actually receives: the line you typed, then the shared style
+ * block, which by this point already has the avatar's identity notes folded
+ * into it. Exported so `--dry-run` can show the real thing rather than a
+ * reconstruction that might drift from what is sent.
+ */
+export function buildPrompt(prompt: string, config: Config): string {
+  return config.stylePrompt ? `${prompt}\n\n${config.stylePrompt}` : prompt;
+}
+
 export async function generateClip({
   prompt,
   config,
   seed,
   label,
 }: GenerateOptions): Promise<GenerateResult> {
-  const fullPrompt = config.stylePrompt
-    ? `${prompt}\n\n${config.stylePrompt}`
-    : prompt;
+  const fullPrompt = buildPrompt(prompt, config);
 
   // t2v ignores references entirely, so don't touch the filesystem for them —
   // a stale "refs" entry in the config shouldn't fail a text-only clip.
