@@ -25,8 +25,15 @@ design file over Paper Desktop's MCP server. See
 Needs Node 22.18 or newer, on macOS or Linux.
 
 ```bash
-npm install -g github:syanhg/UGC
+npm install -g https://github.com/syanhg/UGC/archive/refs/heads/main.tar.gz
 ugc setup
+```
+
+Or from a clone, if you plan to change anything:
+
+```bash
+git clone https://github.com/syanhg/UGC.git && cd UGC
+npm install && npm link
 ```
 
 `setup` stores your Gemini API key in `~/.ugc/.env` with `0600` permissions and
@@ -115,8 +122,7 @@ ugc avatar sync
 
 One top-level layer becomes one avatar, named after that layer, and every image
 in its subtree becomes one of its reference photos. Re-syncing keeps the
-original seed. Local-only avatars are never deleted. Everything else in `ugc`
-works without Paper.
+original seed. Local-only avatars are never deleted.
 
 ## Keeping the face consistent
 
@@ -128,15 +134,18 @@ works without Paper.
 
 Reusing the same reference photos matters more than any other setting, which is
 what an avatar enforces. If clips drift in `r2v`, switch to `i2v`. A seed
-reproduces a *run*; the reference photos are what hold a face steady across
-different prompts.
+reproduces a *run*; the reference photos are what hold a face steady.
 
 ## Responsible use
 
-**Use an AI-generated character, not a real person.** Generate a face with
-ChatGPT, Midjourney, or similar, and register that as your avatar. It sidesteps
-the consent and likeness problems entirely, and a synthetic face is usually
-cleaner and better lit than a real photo anyway.
+**Do not use a real person's face. Use an AI-generated character.**
+
+Generate a face with ChatGPT, Midjourney, or similar and register that as your
+avatar. This is the only intended way to use this tool. Animating a real
+person's photo into them speaking to camera is how a deepfake is made, and no
+amount of good intent changes what the output is or who it can hurt. A
+synthetic face costs you nothing, carries no consent or likeness problem, and
+is usually cleaner and better lit anyway.
 
 Follow Google's
 [Generative AI Prohibited Use Policy](https://policies.google.com/terms/generative-ai/use-policy)
