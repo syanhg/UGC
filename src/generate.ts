@@ -210,7 +210,12 @@ export function explainError(err: unknown): string {
     );
   }
 
-  if (/billing|quota|429|resource_exhausted|free tier/i.test(message)) {
+  // Figma failures travel through the same reporting path, so they must be
+  // matched before the Veo branches — a 429 from Figma is not a Veo billing
+  // problem, and saying so sends you to fix the wrong thing.
+  if (/figma/i.test(message)) return message;
+
+  if (/billing|quota|resource_exhausted|free tier/i.test(message)) {
     return (
       `${message}\n\n` +
       `Veo is not on the Gemini free tier. Enable billing on the Google Cloud ` +

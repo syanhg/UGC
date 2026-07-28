@@ -14,12 +14,29 @@ function token(): string {
   return value;
 }
 
-async function api<T>(path: string): Promise<T> {
-  const res = await fetch(`${API}${path}`, {
-    headers: { 'X-Figma-Token': token() },
-  });
+async function api<T>(path: string, attempts = 4): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    const res = await fetch(`${API}${path}`, {
+      headers: { 'X-Figma-Token': token() },
+    });
 
-  if (!res.ok) {
+    if (res.ok) return (await res.json()) as T;
+
+    // Figma rate-limits per token and tells you how long to wait. Honour it
+    // rather than failing a sync that would succeed a moment later.
+    if (res.status === 429 && attempt < attempts) {
+      const retryAfter = Number(res.headers.get('retry-after'));
+      const waitMs = Number.isFinite(retryAfter) && retryAfter > 0
+        ? Math.min(retryAfter * 1000, 60_000)
+        : Math.min(5_000 * 2 ** (attempt - 1), 60_000);
+
+      console.log(
+        `  Figma rate limit — waiting ${Math.round(waitMs / 1000)}s (${attempt}/${attempts - 1})`,
+      );
+      await new Promise((r) => setTimeout(r, waitMs));
+      continue;
+    }
+
     const detail = await res.text().catch(() => '');
     if (res.status === 403 || res.status === 404) {
       throw new Error(
@@ -28,10 +45,15 @@ async function api<T>(path: string): Promise<T> {
           `${detail.slice(0, 200)}`,
       );
     }
+    if (res.status === 429) {
+      throw new Error(
+        `Figma rate limit still in effect after ${attempts - 1} retries. ` +
+          `Wait a few minutes and run "ugc avatar sync" again — ` +
+          `your local avatars are unaffected.`,
+      );
+    }
     throw new Error(`Figma request failed: ${res.status} ${res.statusText}`);
   }
-
-  return (await res.json()) as T;
 }
 
 /** Accepts a bare file key or any Figma file URL. */
@@ -54,19 +76,25 @@ interface FileResponse {
   document: Node;
 }
 
-export interface FigmaAvatar {
-  /** The layer name, which becomes the avatar name. */
-  name: string;
-  nodeId: string;
-  imageRefs: string[];
+export interface FigmaPhoto {
+  imageRef: string;
+  /** The layer name in Figma, so the CLI can refer to photos as you named them. */
+  label: string;
 }
 
-function imageRefsIn(node: Node): string[] {
+export interface FigmaAvatar {
+  /** The section name, which becomes the avatar name. */
+  name: string;
+  nodeId: string;
+  photos: FigmaPhoto[];
+}
+
+function photosIn(node: Node): FigmaPhoto[] {
   const here = (node.fills ?? [])
     .filter((f) => f.type === 'IMAGE' && f.imageRef)
-    .map((f) => f.imageRef as string);
+    .map((f) => ({ imageRef: f.imageRef as string, label: node.name }));
 
-  return [...here, ...(node.children ?? []).flatMap(imageRefsIn)];
+  return [...here, ...(node.children ?? []).flatMap(photosIn)];
 }
 
 export interface ReadFileResult {
@@ -104,9 +132,9 @@ export async function readAvatars(
     .map((node) => ({
       name: node.name,
       nodeId: node.id,
-      imageRefs: imageRefsIn(node),
+      photos: photosIn(node),
     }))
-    .filter((a) => a.imageRefs.length > 0);
+    .filter((a) => a.photos.length > 0);
 
   return { fileName: file.name, pageName: page.name, avatars };
 }

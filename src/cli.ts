@@ -37,6 +37,7 @@ import {
   getAvatar,
   loadAvatars,
   removeAvatar,
+  photoLabel,
   slugifyName,
   type Avatar,
 } from './avatars.ts';
@@ -430,13 +431,21 @@ async function runInteractive() {
 
   console.log('\n\x1b[1mugc\x1b[0m — face-consistent UGC clips');
 
+  // Figma-backed avatars sort first: when a Figma file is the source of truth,
+  // the section you just edited there is the one you are most likely to want.
+  const ordered = [...avatars].sort(
+    (a, b) => Number(Boolean(b.figma)) - Number(Boolean(a.figma)),
+  );
+
   const avatarName = await select<string | undefined>(
-    'Avatar',
+    'Avatar — one Figma section is one character',
     [
-      ...avatars.map((a) => ({
+      ...ordered.map((a) => ({
         value: a.name as string | undefined,
         label: a.name,
-        hint: `${a.refs.length} ref${a.refs.length === 1 ? '' : 's'} · seed ${a.seed}`,
+        hint:
+          `${a.refs.length} photo${a.refs.length === 1 ? '' : 's'} · seed ${a.seed}` +
+          `${a.figma ? ' · figma' : ' · local'}`,
       })),
       {
         value: undefined,
@@ -457,11 +466,11 @@ async function runInteractive() {
   const photo =
     chosen && chosen.refs.length > 1
       ? await select(
-          'Which photo?',
+          `Which photo from "${chosen.name}"?`,
           chosen.refs.map((ref, index) => ({
             value: index + 1,
-            label: basename(ref),
-            hint: `${ref}${index === 0 ? ' · default' : ''}`,
+            label: photoLabel(chosen, index),
+            hint: `${basename(ref)}${index === 0 ? ' · default' : ''}`,
           })),
           0,
         )
@@ -662,19 +671,20 @@ async function runAvatarSync(args: Args) {
 
       if (args.dryRun) {
         console.log(
-          `  ${known ? '~' : '+'} ${name}  ${found.imageRefs.length} photo` +
-            `${found.imageRefs.length === 1 ? '' : 's'}` +
+          `  ${known ? '~' : '+'} ${name}  ${found.photos.length} photo` +
+            `${found.photos.length === 1 ? '' : 's'}` +
             `${known ? '  (would replace)' : '  (new)'}`,
         );
+        for (const photo of found.photos) console.log(`      · ${photo.label}`);
         continue;
       }
 
       // Download to scratch first so a failure part-way cannot leave an
       // avatar registered against photos that were never written.
       const files: string[] = [];
-      for (const [index, ref] of found.imageRefs.entries()) {
-        const url = urls[ref];
-        if (!url) throw new Error(`no download URL for image ${ref}`);
+      for (const [index, photo] of found.photos.entries()) {
+        const url = urls[photo.imageRef];
+        if (!url) throw new Error(`no download URL for image ${photo.imageRef}`);
 
         const { data, ext } = await downloadImage(url);
         const path = resolve(scratch, `${name}-${index}${ext}`);
@@ -685,6 +695,7 @@ async function runAvatarSync(args: Args) {
       const avatar = await addAvatar({
         name,
         sources: files,
+        labels: found.photos.map((p) => p.label),
         force: true,
         figma: {
           fileKey,

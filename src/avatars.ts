@@ -1,6 +1,6 @@
 import { readFile, writeFile, mkdir, copyFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { extname, join } from 'node:path';
+import { basename, extname, join } from 'node:path';
 import { MEDIA_TYPES, type Mode } from './config.ts';
 import { fromCwd, fromRoot } from './paths.ts';
 
@@ -24,6 +24,12 @@ export interface Avatar {
   name: string;
   /** Project-relative paths to the copies under refs/<name>/. */
   refs: string[];
+  /**
+   * Display name per entry in `refs`, in the same order. Figma layer names go
+   * here, so a photo can be picked by the name it has in the design file
+   * rather than by the meaningless "01.png" it was copied to.
+   */
+  photoLabels?: string[];
   /** Locked at registration so repeat runs of a prompt reproduce exactly. */
   seed: number;
   mode?: Mode;
@@ -32,6 +38,12 @@ export interface Avatar {
   notes?: string;
   figma?: FigmaSource;
   createdAt: string;
+}
+
+/** The name to show for photo `index`, falling back to the file name. */
+export function photoLabel(avatar: Avatar, index: number): string {
+  const label = avatar.photoLabels?.[index];
+  return label ?? basename(avatar.refs[index] ?? '');
 }
 
 type Registry = Record<string, Avatar>;
@@ -103,6 +115,8 @@ export async function getAvatar(name: string): Promise<Avatar> {
 export interface AddAvatarOptions {
   name: string;
   sources: string[];
+  /** Display names for `sources`, in the same order. */
+  labels?: string[];
   seed?: number;
   mode?: Mode;
   model?: string;
@@ -115,6 +129,7 @@ export interface AddAvatarOptions {
 export async function addAvatar({
   name,
   sources,
+  labels,
   seed,
   mode,
   model,
@@ -169,6 +184,7 @@ export async function addAvatar({
   const avatar: Avatar = {
     name,
     refs,
+    ...(labels?.length ? { photoLabels: labels } : {}),
     // A re-synced avatar keeps its original seed, so clips generated before
     // and after a photo update stay comparable.
     seed: seed ?? existing?.seed ?? Math.floor(Math.random() * 1_000_000),
